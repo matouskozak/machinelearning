@@ -170,10 +170,12 @@ namespace Microsoft.ML.Tests.TrainerEstimators
         [InlineData(0.9999999)]
         public void AlphaAcceptsValuesStrictlyInsideNativeFloatRange(double alpha)
         {
+            var ml = new MLContext(seed: 1);
             var options = RegressionSettings();
             options.Objective = RegressionOptions.RegressionObjective.Quantile;
             options.Alpha = alpha;
-            var trainer = new MLContext(seed: 1).Regression.Trainers.LightGbm(options);
+            var trainer = ml.Regression.Trainers.LightGbm(options);
+            trainer.Fit(ml.Data.LoadFromEnumerable(CreateQuantileRows()));
             Assert.Equal(alpha, Convert.ToDouble(trainer.GetGbmParameters()["alpha"], CultureInfo.InvariantCulture));
         }
 

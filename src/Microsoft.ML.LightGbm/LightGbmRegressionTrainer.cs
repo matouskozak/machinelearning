@@ -200,8 +200,6 @@ namespace Microsoft.ML.Trainers.LightGbm
                 Contracts.CheckUserArg(Enum.IsDefined(typeof(EvaluateMetricType), EvaluationMetric), nameof(EvaluationMetric), "Unknown evaluation metric.");
                 var res = base.ToDictionary(host);
                 res[GetOptionName(nameof(EvaluateMetricType))] = GetOptionName(EvaluationMetric.ToString());
-                if (Objective == RegressionObjective.Quantile || EvaluationMetric == EvaluateMetricType.Quantile)
-                    res["alpha"] = Alpha;
 
                 return res;
             }
