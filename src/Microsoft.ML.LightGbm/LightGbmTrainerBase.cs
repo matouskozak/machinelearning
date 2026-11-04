@@ -21,6 +21,17 @@ using Microsoft.ML.Trainers.FastTree;
 
 namespace Microsoft.ML.Trainers.LightGbm
 {
+    /// <summary>Monotonic direction of native raw tree scores for a numeric feature slot, holding other features fixed.</summary>
+    public enum MonotoneConstraint
+    {
+        /// <summary>The raw tree score cannot increase as the feature increases.</summary>
+        Decreasing = -1,
+        /// <summary>No monotonic constraint.</summary>
+        None = 0,
+        /// <summary>The raw tree score cannot decrease as the feature increases.</summary>
+        Increasing = 1
+    }
+
     [BestFriend]
     internal static class Defaults
     {
@@ -163,6 +174,11 @@ namespace Microsoft.ML.Trainers.LightGbm
             /// <value>
             /// 0 means disable early stopping.
             /// </value>
+            /// <remarks>
+            /// Only the trainer's singular EvaluationMetric controls stopping. Additional metrics are diagnostic.
+            /// Missing validation data and DART disable stopping with a warning. A missing or nonfinite primary
+            /// metric cannot select a best model. Completing the iteration budget returns all trees.
+            /// </remarks>
             [Argument(ArgumentType.AtMostOnce, HelpText = "Rounds of early stopping, 0 will disable it.",
                 ShortName = "es")]
             public int EarlyStoppingRound = 0;
@@ -179,6 +195,16 @@ namespace Microsoft.ML.Trainers.LightGbm
             [Argument(ArgumentType.AtMostOnce, HelpText = "Enable categorical split or not.", ShortName = "cat")]
             [TlcModule.SweepableDiscreteParam("UseCat", new object[] { true, false })]
             public bool? UseCategoricalSplit;
+
+            /// <summary>
+            /// Optional constraints indexed by the original Features vector slots. The length must match
+            /// the vector size. Categorical slots must be None, even when categorical splitting is disabled.
+            /// Numeric slots are mapped through any native categorical collapsing. Quantile training
+            /// does not support nonzero constraints. Null or an all-None vector imposes no constraints.
+            /// Constraints apply to raw tree scores, not to multiclass probabilities after normalization.
+            /// </summary>
+            [Argument(ArgumentType.Multiple, HelpText = "Monotonic directions for numeric feature slots.")]
+            public MonotoneConstraint[] MonotoneConstraints;
 
             /// <summary>
             /// Whether to enable special handling of missing value or not.
@@ -278,6 +304,8 @@ namespace Microsoft.ML.Trainers.LightGbm
                 }
             }
 
+            internal virtual string[] GetEvaluationMetrics() => new[] { "" };
+
             internal virtual Dictionary<string, object> ToDictionary(IHost host)
             {
                 Contracts.CheckValue(host, nameof(host));
@@ -321,6 +349,9 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         // Contains the passed in options when the API is called
         private protected readonly TOptions LightGbmTrainerOptions;
+
+        private readonly string[] _requestedMetrics;
+        private readonly MonotoneConstraint[] _monotoneConstraints;
 
         /// <summary>
         /// Stores arguments as objects to convert them to invariant string type in the end so that
@@ -376,6 +407,11 @@ namespace Microsoft.ML.Trainers.LightGbm
             Contracts.CheckUserArg(options.L2CategoricalRegularization >= 0.0, nameof(options.L2CategoricalRegularization), "must be >= 0.");
 
             LightGbmTrainerOptions = options;
+            _requestedMetrics = options.GetEvaluationMetrics();
+            _monotoneConstraints = options.MonotoneConstraints == null ? null : (MonotoneConstraint[])options.MonotoneConstraints.Clone();
+            Contracts.CheckUserArg(_monotoneConstraints == null ||
+                _monotoneConstraints.All(value => value >= MonotoneConstraint.Decreasing && value <= MonotoneConstraint.Increasing),
+                nameof(options.MonotoneConstraints), "Entries must be None, Increasing, or Decreasing.");
             ParallelTraining = LightGbmTrainerOptions.ParallelTrainer != null ? LightGbmTrainerOptions.ParallelTrainer.CreateComponent(Host) : new SingleTrainer();
             GbmOptions = LightGbmTrainerOptions.ToDictionary(Host);
             InitParallelTraining();
@@ -419,6 +455,10 @@ namespace Microsoft.ML.Trainers.LightGbm
 
                         foreach (var field in optionsFields)
                         {
+                            // Training-only typed options do not need reconstruction to score an imported model.
+                            if (field.Name == nameof(LightGbmRegressionTrainer.Options.Objective) ||
+                                field.Name == nameof(OptionsBase.MonotoneConstraints))
+                                continue;
                             var lightGbmName = LightGbmTrainerOptions.GetOptionName(field.Name);
                             if (modelParameters.ContainsKey(lightGbmName))
                             {
@@ -678,6 +718,8 @@ namespace Microsoft.ML.Trainers.LightGbm
             GetDefaultParameters(ch, numRow, catMetaData.CategoricalBoudaries != null, catMetaData.TotalCats);
 
             CheckAndUpdateParametersBeforeTraining(ch, trainData, labels, groups);
+            GbmOptions["metric"] = LightGbmMetrics.Resolve(_requestedMetrics, (string)GbmOptions["objective"]);
+            SetMonotoneConstraints(ch, trainData, catMetaData);
             string param = LightGbmInterfaceUtils.JoinParameters(GbmOptions);
 
             Dataset dtrain;
@@ -692,6 +734,31 @@ namespace Microsoft.ML.Trainers.LightGbm
             LoadDataset(ch, factory, dtrain, numRow, LightGbmTrainerOptions.BatchSize, catMetaData);
 
             return dtrain;
+        }
+
+        private void SetMonotoneConstraints(IChannel ch, RoleMappedData data, CategoricalMetaData metadata)
+        {
+            if (_monotoneConstraints == null)
+                return;
+            ch.CheckUserArg(_monotoneConstraints.Length == FeatureCount, nameof(OptionsBase.MonotoneConstraints),
+                "The constraint count must equal the original Features vector size.");
+            if (_monotoneConstraints.All(value => value == MonotoneConstraint.None))
+                return;
+            ch.CheckUserArg((string)GbmOptions["objective"] != "quantile", nameof(OptionsBase.MonotoneConstraints),
+                "Quantile regression does not support monotone constraints.");
+
+            var feature = data.Schema.Feature.Value;
+            if (AnnotationUtils.TryGetCategoricalFeatureIndices(data.Schema.Schema, feature.Index, out var categorical))
+            {
+                for (int i = 0; i < categorical.Length; i += 2)
+                    for (int slot = categorical[i]; slot <= categorical[i + 1]; slot++)
+                        ch.CheckUserArg(_monotoneConstraints[slot] == MonotoneConstraint.None,
+                            nameof(OptionsBase.MonotoneConstraints), "Categorical feature slots cannot have monotone constraints.");
+            }
+            var nativeConstraints = new int[metadata.NumCol];
+            for (int i = 0; i < nativeConstraints.Length; i++)
+                nativeConstraints[i] = (int)_monotoneConstraints[metadata.CategoricalBoudaries == null ? i : metadata.CategoricalBoudaries[i]];
+            GbmOptions["monotone_constraints"] = string.Join(",", nativeConstraints);
         }
 
         private Dataset LoadValidationData(IChannel ch, Dataset dtrain, RoleMappedData validData, CategoricalMetaData catMetaData)

@@ -80,6 +80,8 @@ namespace Microsoft.ML.Trainers.LightGbm
                 Default,
                 Error,
                 LogLoss,
+                /// <summary>Multiclass AUC-mu with equal class-pair weights.</summary>
+                AreaUnderCurveMu,
             }
 
             /// <summary>
@@ -110,6 +112,17 @@ namespace Microsoft.ML.Trainers.LightGbm
                 ShortName = "em")]
             public EvaluateMetricType EvaluationMetric = EvaluateMetricType.Error;
 
+            /// <summary>
+            /// Additional diagnostic metrics in reporting order. Only <see cref="EvaluationMetric"/> controls
+            /// early stopping. Null or empty adds none. Duplicates are removed. None and Default are invalid
+            /// entries, and primary None cannot have extras. Enable Verbose to report via MLContext.Log.
+            /// </summary>
+            [Argument(ArgumentType.Multiple, HelpText = "Additional diagnostic evaluation metrics.")]
+            public EvaluateMetricType[] AdditionalEvaluationMetrics;
+
+            internal override string[] GetEvaluationMetrics()
+                => LightGbmMetrics.Capture(EvaluationMetric, AdditionalEvaluationMetrics, GetOptionName);
+
             static Options()
             {
                 NameMapping.Add(nameof(EvaluateMetricType), "metric");
@@ -117,6 +130,7 @@ namespace Microsoft.ML.Trainers.LightGbm
                 NameMapping.Add(nameof(EvaluateMetricType.Default), "");
                 NameMapping.Add(nameof(EvaluateMetricType.Error), "multi_error");
                 NameMapping.Add(nameof(EvaluateMetricType.LogLoss), "multi_logloss");
+                NameMapping.Add(nameof(EvaluateMetricType.AreaUnderCurveMu), "auc_mu");
             }
 
             internal override Dictionary<string, object> ToDictionary(IHost host)

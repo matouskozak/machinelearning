@@ -11655,7 +11655,8 @@
               "Default",
               "Logloss",
               "Error",
-              "AreaUnderCurve"
+              "AreaUnderCurve",
+              "AveragePrecision"
             ]
           },
           "Desc": "Evaluation metrics.",
@@ -11666,6 +11667,28 @@
           "SortOrder": 150.0,
           "IsNullable": false,
           "Default": "Logloss"
+        },
+        {
+          "Name": "AdditionalEvaluationMetrics",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Default",
+                "Logloss",
+                "Error",
+                "AreaUnderCurve",
+                "AveragePrecision"
+              ]
+            }
+          },
+          "Desc": "Additional diagnostic evaluation metrics.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
         },
         {
           "Name": "MaximumBinCountPerFeature",
@@ -11751,6 +11774,25 @@
               false
             ]
           }
+        },
+        {
+          "Name": "MonotoneConstraints",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Increasing",
+                "Decreasing"
+              ]
+            }
+          },
+          "Desc": "Monotonic directions for numeric feature slots.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
         },
         {
           "Name": "HandleMissingValue",
@@ -12201,7 +12243,8 @@
               "None",
               "Default",
               "Error",
-              "LogLoss"
+              "LogLoss",
+              "AreaUnderCurveMu"
             ]
           },
           "Desc": "Evaluation metrics.",
@@ -12212,6 +12255,27 @@
           "SortOrder": 150.0,
           "IsNullable": false,
           "Default": "Error"
+        },
+        {
+          "Name": "AdditionalEvaluationMetrics",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Default",
+                "Error",
+                "LogLoss",
+                "AreaUnderCurveMu"
+              ]
+            }
+          },
+          "Desc": "Additional diagnostic evaluation metrics.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
         },
         {
           "Name": "MaximumBinCountPerFeature",
@@ -12297,6 +12361,25 @@
               false
             ]
           }
+        },
+        {
+          "Name": "MonotoneConstraints",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Increasing",
+                "Decreasing"
+              ]
+            }
+          },
+          "Desc": "Monotonic directions for numeric feature slots.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
         },
         {
           "Name": "HandleMissingValue",
@@ -12760,6 +12843,26 @@
           "Default": "NormalizedDiscountedCumulativeGain"
         },
         {
+          "Name": "AdditionalEvaluationMetrics",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Default",
+                "MeanAveragedPrecision",
+                "NormalizedDiscountedCumulativeGain"
+              ]
+            }
+          },
+          "Desc": "Additional diagnostic evaluation metrics.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
+        },
+        {
           "Name": "MaximumBinCountPerFeature",
           "Type": "Int",
           "Desc": "Maximum number of bucket bin for features.",
@@ -12843,6 +12946,25 @@
               false
             ]
           }
+        },
+        {
+          "Name": "MonotoneConstraints",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Increasing",
+                "Decreasing"
+              ]
+            }
+          },
+          "Desc": "Monotonic directions for numeric feature slots.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
         },
         {
           "Name": "HandleMissingValue",
@@ -13246,6 +13368,30 @@
           "Default": "Auto"
         },
         {
+          "Name": "Objective",
+          "Type": {
+            "Kind": "Enum",
+            "Values": [
+              "Regression",
+              "Quantile"
+            ]
+          },
+          "Desc": "Regression training objective.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": "Regression"
+        },
+        {
+          "Name": "Alpha",
+          "Type": "Float",
+          "Desc": "Quantile level or Huber parameter, in (0, 1).",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": 0.5
+        },
+        {
           "Name": "EvaluationMetric",
           "Type": {
             "Kind": "Enum",
@@ -13254,7 +13400,11 @@
               "Default",
               "MeanAbsoluteError",
               "RootMeanSquaredError",
-              "MeanSquaredError"
+              "MeanSquaredError",
+              "MeanAbsolutePercentageError",
+              "Quantile",
+              "Huber",
+              "Fair"
             ]
           },
           "Desc": "Evaluation metrics.",
@@ -13265,6 +13415,31 @@
           "SortOrder": 150.0,
           "IsNullable": false,
           "Default": "RootMeanSquaredError"
+        },
+        {
+          "Name": "AdditionalEvaluationMetrics",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Default",
+                "MeanAbsoluteError",
+                "RootMeanSquaredError",
+                "MeanSquaredError",
+                "MeanAbsolutePercentageError",
+                "Quantile",
+                "Huber",
+                "Fair"
+              ]
+            }
+          },
+          "Desc": "Additional diagnostic evaluation metrics.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
         },
         {
           "Name": "MaximumBinCountPerFeature",
@@ -13350,6 +13525,25 @@
               false
             ]
           }
+        },
+        {
+          "Name": "MonotoneConstraints",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Increasing",
+                "Decreasing"
+              ]
+            }
+          },
+          "Desc": "Monotonic directions for numeric feature slots.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
         },
         {
           "Name": "HandleMissingValue",

@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.ML;
@@ -126,8 +127,36 @@ namespace Microsoft.ML.Trainers.LightGbm
                 Default,
                 MeanAbsoluteError,
                 RootMeanSquaredError,
-                MeanSquaredError
+                MeanSquaredError,
+                /// <summary>Mean absolute percentage error.</summary>
+                MeanAbsolutePercentageError,
+                /// <summary>Quantile loss, using <see cref="Alpha"/>.</summary>
+                Quantile,
+                /// <summary>Huber loss, using <see cref="Alpha"/>.</summary>
+                Huber,
+                /// <summary>Fair loss with the native default scale of 1.</summary>
+                Fair
             };
+
+            /// <summary>The regression training objective.</summary>
+            public enum RegressionObjective
+            {
+                /// <summary>Squared-error regression.</summary>
+                Regression = 0,
+                /// <summary>Quantile regression.</summary>
+                Quantile = 1
+            }
+
+            /// <summary>The training objective. Evaluation metrics do not change this objective.</summary>
+            [Argument(ArgumentType.AtMostOnce, HelpText = "Regression training objective.")]
+            public RegressionObjective Objective = RegressionObjective.Regression;
+
+            /// <summary>
+            /// Quantile level, or Huber loss parameter. Must be finite and strictly between zero and one.
+            /// Used by the quantile objective and by quantile and Huber evaluation metrics.
+            /// </summary>
+            [Argument(ArgumentType.AtMostOnce, HelpText = "Quantile level or Huber parameter, in (0, 1).")]
+            public double Alpha = 0.5;
 
             /// <summary>
             /// Determines what evaluation metric to use.
@@ -137,6 +166,18 @@ namespace Microsoft.ML.Trainers.LightGbm
                 ShortName = "em")]
             public EvaluateMetricType EvaluationMetric = EvaluateMetricType.RootMeanSquaredError;
 
+            /// <summary>
+            /// Additional diagnostic metrics, in reporting order. The singular <see cref="EvaluationMetric"/>
+            /// alone controls early stopping. Null or empty adds none. Duplicates are removed.
+            /// Entries must be explicit metrics, not None or Default. Cannot be combined with primary None.
+            /// Set <c>Verbose</c> to report through <see cref="MLContext.Log"/>.
+            /// </summary>
+            [Argument(ArgumentType.Multiple, HelpText = "Additional diagnostic evaluation metrics.")]
+            public EvaluateMetricType[] AdditionalEvaluationMetrics;
+
+            internal override string[] GetEvaluationMetrics()
+                => LightGbmMetrics.Capture(EvaluationMetric, AdditionalEvaluationMetrics, GetOptionName);
+
             static Options()
             {
                 NameMapping.Add(nameof(EvaluateMetricType), "metric");
@@ -145,6 +186,10 @@ namespace Microsoft.ML.Trainers.LightGbm
                 NameMapping.Add(nameof(EvaluateMetricType.MeanAbsoluteError), "mae");
                 NameMapping.Add(nameof(EvaluateMetricType.RootMeanSquaredError), "rmse");
                 NameMapping.Add(nameof(EvaluateMetricType.MeanSquaredError), "mse");
+                NameMapping.Add(nameof(EvaluateMetricType.MeanAbsolutePercentageError), "mape");
+                NameMapping.Add(nameof(EvaluateMetricType.Quantile), "quantile");
+                NameMapping.Add(nameof(EvaluateMetricType.Huber), "huber");
+                NameMapping.Add(nameof(EvaluateMetricType.Fair), "fair");
             }
 
             internal override Dictionary<string, object> ToDictionary(IHost host)
@@ -188,9 +233,18 @@ namespace Microsoft.ML.Trainers.LightGbm
         {
         }
 
+        private readonly Options.RegressionObjective _objective;
+        private readonly double _alpha = 0.5;
+
         internal LightGbmRegressionTrainer(IHostEnvironment env, Options options)
              : base(env, LoadNameValue, options, TrainerUtils.MakeR4ScalarColumn(options.LabelColumnName))
         {
+            Contracts.CheckUserArg(Enum.IsDefined(typeof(Options.RegressionObjective), options.Objective),
+                nameof(options.Objective), "Unknown regression objective.");
+            Contracts.CheckUserArg(options.Alpha > 0 && options.Alpha < 1,
+                nameof(options.Alpha), "must be finite and in (0, 1).");
+            _objective = options.Objective;
+            _alpha = options.Alpha;
         }
 
         /// <summary>
@@ -240,7 +294,8 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         private protected override void CheckAndUpdateParametersBeforeTraining(IChannel ch, RoleMappedData data, float[] labels, int[] groups)
         {
-            GbmOptions["objective"] = "regression";
+            GbmOptions["objective"] = _objective == Options.RegressionObjective.Quantile ? "quantile" : "regression";
+            GbmOptions["alpha"] = _alpha;
         }
 
         private protected override SchemaShape.Column[] GetOutputColumnsCore(SchemaShape inputSchema)

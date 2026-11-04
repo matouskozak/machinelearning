@@ -134,6 +134,8 @@ namespace Microsoft.ML.Trainers.LightGbm
                 Logloss,
                 Error,
                 AreaUnderCurve,
+                /// <summary>Area under the precision-recall curve using native average precision.</summary>
+                AveragePrecision,
             };
 
             /// <summary>
@@ -169,6 +171,17 @@ namespace Microsoft.ML.Trainers.LightGbm
                 ShortName = "em")]
             public EvaluateMetricType EvaluationMetric = EvaluateMetricType.Logloss;
 
+            /// <summary>
+            /// Additional diagnostic metrics in reporting order. Only <see cref="EvaluationMetric"/> controls
+            /// early stopping. Null or empty adds none. Duplicates are removed. None and Default are invalid
+            /// entries, and primary None cannot have extras. Enable Verbose to report via MLContext.Log.
+            /// </summary>
+            [Argument(ArgumentType.Multiple, HelpText = "Additional diagnostic evaluation metrics.")]
+            public EvaluateMetricType[] AdditionalEvaluationMetrics;
+
+            internal override string[] GetEvaluationMetrics()
+                => LightGbmMetrics.Capture(EvaluationMetric, AdditionalEvaluationMetrics, GetOptionName);
+
             static Options()
             {
                 NameMapping.Add(nameof(EvaluateMetricType), "metric");
@@ -177,6 +190,7 @@ namespace Microsoft.ML.Trainers.LightGbm
                 NameMapping.Add(nameof(EvaluateMetricType.Logloss), "binary_logloss");
                 NameMapping.Add(nameof(EvaluateMetricType.Error), "binary_error");
                 NameMapping.Add(nameof(EvaluateMetricType.AreaUnderCurve), "auc");
+                NameMapping.Add(nameof(EvaluateMetricType.AveragePrecision), "average_precision");
                 NameMapping.Add(nameof(WeightOfPositiveExamples), "scale_pos_weight");
             }
 

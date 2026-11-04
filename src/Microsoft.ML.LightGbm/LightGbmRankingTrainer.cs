@@ -147,6 +147,18 @@ namespace Microsoft.ML.Trainers.LightGbm
                 ShortName = "em")]
             public EvaluateMetricType EvaluationMetric = EvaluateMetricType.NormalizedDiscountedCumulativeGain;
 
+            /// <summary>
+            /// Additional diagnostic metrics in reporting order. Only <see cref="EvaluationMetric"/> controls
+            /// early stopping. Both NDCG and MAP use cutoff 5. Null or empty adds none. Duplicates are removed.
+            /// None and Default are invalid entries, and primary None cannot have extras.
+            /// Enable Verbose to report via MLContext.Log.
+            /// </summary>
+            [Argument(ArgumentType.Multiple, HelpText = "Additional diagnostic evaluation metrics.")]
+            public EvaluateMetricType[] AdditionalEvaluationMetrics;
+
+            internal override string[] GetEvaluationMetrics()
+                => LightGbmMetrics.Capture(EvaluationMetric, AdditionalEvaluationMetrics, GetOptionName);
+
             static Options()
             {
                 NameMapping.Add(nameof(CustomGains), "label_gain");

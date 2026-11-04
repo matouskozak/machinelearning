@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.Trainers.FastTree;
 
@@ -17,7 +18,10 @@ namespace Microsoft.ML.Trainers.LightGbm
     internal sealed class Booster : IDisposable
     {
         private readonly bool _hasValid;
-        private readonly bool _hasMetric;
+        private readonly double[] _trainMetrics;
+        private readonly double[] _validMetrics;
+
+        public IReadOnlyList<string> MetricNames { get; }
 
         public WrappedLightGbmInterface.SafeBoosterHandle Handle { get; private set; }
         public int BestIteration { get; set; }
@@ -27,19 +31,74 @@ namespace Microsoft.ML.Trainers.LightGbm
             var param = LightGbmInterfaceUtils.JoinParameters(parameters);
             LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterCreate(trainset.Handle, param, out var handle));
             Handle = handle;
-            if (validset != null)
+            try
             {
-                LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterAddValidData(Handle, validset.Handle));
-                _hasValid = true;
-            }
+                if (validset != null)
+                {
+                    LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterAddValidData(Handle, validset.Handle));
+                    _hasValid = true;
+                }
 
-            int numEval = 0;
-            BestIteration = -1;
-            LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEvalCounts(Handle, ref numEval));
-            // At most one metric in ML.NET.
-            Contracts.Assert(numEval <= 1);
-            if (numEval == 1)
-                _hasMetric = true;
+                int numEval = 0;
+                BestIteration = -1;
+                LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEvalCounts(Handle, ref numEval));
+                Contracts.Check(numEval >= 0, "Invalid native evaluation count.");
+                MetricNames = Array.AsReadOnly(GetMetricNames(numEval));
+                _trainMetrics = new double[numEval];
+                _validMetrics = _hasValid ? new double[numEval] : Array.Empty<double>();
+            }
+            catch
+            {
+                Handle.Dispose();
+                throw;
+            }
+        }
+
+        private unsafe string[] GetMetricNames(int count)
+        {
+            if (count == 0)
+                return Array.Empty<string>();
+            int capacity = 64;
+            while (true)
+            {
+                var buffer = new byte[checked(count * capacity)];
+                var pointers = new IntPtr[count];
+                int actualCount = 0;
+                UIntPtr required = UIntPtr.Zero;
+                fixed (byte* bytes = buffer)
+                fixed (IntPtr* names = pointers)
+                {
+                    for (int i = 0; i < count; i++)
+                        pointers[i] = (IntPtr)(bytes + i * capacity);
+                    LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEvalNames(
+                        Handle, count, ref actualCount, new UIntPtr((uint)capacity), ref required, names));
+                }
+                Contracts.Check(actualCount == count, "Native evaluation name count changed.");
+                if (required.ToUInt64() > (ulong)capacity)
+                {
+                    capacity = checked((int)required.ToUInt64());
+                    continue;
+                }
+                var result = new string[count];
+                for (int i = 0; i < count; i++)
+                {
+                    int start = i * capacity;
+                    int end = Array.IndexOf(buffer, (byte)0, start, capacity);
+                    Contracts.Check(end > start, "Invalid native evaluation name.");
+                    result[i] = Encoding.UTF8.GetString(buffer, start, end - start);
+                }
+                return result;
+            }
+        }
+
+        public int CurrentIteration
+        {
+            get
+            {
+                int iteration = 0;
+                LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetCurrentIteration(Handle, ref iteration));
+                return iteration;
+            }
         }
 
         public bool Update()
@@ -49,28 +108,27 @@ namespace Microsoft.ML.Trainers.LightGbm
             return isFinished == 1;
         }
 
-        public double EvalTrain()
+        public double[] EvalTrain()
         {
-            return Eval(0);
+            Eval(0, _trainMetrics);
+            return _trainMetrics;
         }
 
-        public double EvalValid()
+        public double[] EvalValid()
         {
-            if (_hasValid)
-                return Eval(1);
-            else
-                return double.NaN;
+            Contracts.Check(_hasValid, "Validation dataset not present.");
+            Eval(1, _validMetrics);
+            return _validMetrics;
         }
 
-        private unsafe double Eval(int dataIdx)
+        private unsafe void Eval(int dataIdx, double[] result)
         {
-            if (!_hasMetric)
-                return double.NaN;
+            if (result.Length == 0)
+                return;
             int outLen = 0;
-            double[] res = new double[1];
-            fixed (double* ptr = res)
+            fixed (double* ptr = result)
                 LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEval(Handle, dataIdx, ref outLen, ptr));
-            return res[0];
+            Contracts.Check(outLen == result.Length, "Native evaluation result count changed.");
         }
 
         [BestFriend]
