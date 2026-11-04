@@ -257,6 +257,39 @@ namespace Microsoft.ML.Trainers.LightGbm
             [Argument(ArgumentType.AtMostOnce, HelpText = "Whether to force row-wise histogram building.")]
             public bool ForceRowWise = false;
 
+            /// <summary>
+            /// Optional, constrained native LightGBM settings. The dictionary and its arrays are copied when
+            /// the trainer is constructed. Later changes do not affect that trainer.
+            /// </summary>
+            /// <remarks>
+            /// This fork-only prototype accepts canonical, case-sensitive names, not arbitrary native options.
+            /// Supported keys are <c>metric</c> (one task-compatible string, requiring EvaluationMetric = Default),
+            /// <c>objective</c> (regression only: "regression" or "quantile"), <c>alpha</c> (double, required explicitly
+            /// for quantile), <c>monotone_constraints</c> (int[] in Features slot order, values -1/0/1),
+            /// <c>extra_trees</c> (bool), <c>extra_seed</c> (int, requiring extra_trees),
+            /// <c>feature_fraction_bynode</c> (double in (0,1]), and <c>histogram_pool_size</c> (double MiB, positive or -1).
+            /// Constraints require zeros for categorical slots and are not supported for the quantile objective or multiclass.
+            /// Existing typed options, aliases, multiple metrics, and unlisted native settings are rejected.
+            /// Null or an empty dictionary preserves the existing defaults. This does not change Evaluate() metrics
+            /// or provide entry-point, AutoML, or context-wide configuration.
+            /// <para>
+            /// Supported metrics are l1/l2/rmse/quantile for regression,
+            /// binary_logloss/binary_error/auc/average_precision for binary classification,
+            /// multi_logloss/multi_error/auc_mu for multiclass, and ndcg/map at cutoff 5 for ranking.
+            /// Metrics affect native training/validation logging and early stopping. With Verbose enabled,
+            /// named metric values are logged every 50 iterations. Quantile predicts one scalar quantile,
+            /// not an interval, and requires finite alpha strictly between 0 and 1 at native float precision.
+            /// A supplied alpha is rejected unless the objective or metric is quantile.
+            /// </para>
+            /// <para>
+            /// Constraints refer to the transformed Features vector, not original columns. One-hot categorical
+            /// groups must contain zeros. Numeric constraints are remapped after those groups are collapsed.
+            /// Saved models retain effective native parameters as diagnostic text, not a reusable options object.
+            /// Options are not read from MLContext, and concurrent Fit calls on one trainer are not supported.
+            /// </para>
+            /// </remarks>
+            public Dictionary<string, object> AdditionalOptions;
+
             [Argument(ArgumentType.Multiple, HelpText = "Parallel LightGBM Learning Algorithm", ShortName = "parag")]
             internal ISupportParallel ParallelTrainer = new SingleTrainerFactory();
 
@@ -329,6 +362,9 @@ namespace Microsoft.ML.Trainers.LightGbm
         /// </summary>
         private protected readonly Dictionary<string, object> GbmOptions;
 
+        private readonly Dictionary<string, object> _initialGbmOptions;
+        private readonly LightGbmAdditionalOptions _additionalOptions;
+
         private protected readonly IParallel ParallelTraining;
 
         // Store _featureCount and _trainedEnsemble to construct predictor.
@@ -378,11 +414,16 @@ namespace Microsoft.ML.Trainers.LightGbm
             LightGbmTrainerOptions = options;
             ParallelTraining = LightGbmTrainerOptions.ParallelTrainer != null ? LightGbmTrainerOptions.ParallelTrainer.CreateComponent(Host) : new SingleTrainer();
             GbmOptions = LightGbmTrainerOptions.ToDictionary(Host);
+            _additionalOptions = new LightGbmAdditionalOptions(options.AdditionalOptions, PredictionKind, (string)GbmOptions["metric"]);
             InitParallelTraining();
+            _initialGbmOptions = new Dictionary<string, object>(GbmOptions);
         }
 
         private protected override TModel TrainModelCore(TrainContext context)
         {
+            GbmOptions.Clear();
+            foreach (var pair in _initialGbmOptions)
+                GbmOptions.Add(pair.Key, pair.Value);
             InitializeBeforeTraining();
 
             Host.CheckValue(context, nameof(context));
@@ -678,6 +719,7 @@ namespace Microsoft.ML.Trainers.LightGbm
             GetDefaultParameters(ch, numRow, catMetaData.CategoricalBoudaries != null, catMetaData.TotalCats);
 
             CheckAndUpdateParametersBeforeTraining(ch, trainData, labels, groups);
+            _additionalOptions.Apply(GbmOptions, FeatureCount, catMetaData.CategoricalBoudaries, catMetaData.IsCategoricalFeature);
             string param = LightGbmInterfaceUtils.JoinParameters(GbmOptions);
 
             Dataset dtrain;

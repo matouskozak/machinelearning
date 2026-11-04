@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Collections.Generic;
 using Microsoft.ML.Runtime;
 
@@ -33,9 +34,16 @@ namespace Microsoft.ML.Trainers.LightGbm
             double bestScore = double.MaxValue;
             double factorToSmallerBetter = 1.0;
 
-            var metric = (string)parameters["metric"];
-            if (earlyStoppingRound > 0 && (metric == "auc" || metric == "ndcg" || metric == "map"))
-                factorToSmallerBetter = -1.0;
+            var metric = bst.MetricName;
+            if (earlyStoppingRound > 0)
+            {
+                if (metric == null)
+                {
+                    bst.Dispose();
+                    throw ch.ExceptUserArg(nameof(earlyStoppingRound), "Early stopping requires an evaluation metric.");
+                }
+                factorToSmallerBetter = IsMaximizingMetric(metric) ? -1.0 : 1.0;
+            }
 
             const int evalFreq = 50;
 
@@ -45,9 +53,9 @@ namespace Microsoft.ML.Trainers.LightGbm
             if (verboseEval)
             {
                 ch.Assert(parameters.ContainsKey("metric"));
-                metrics.Add("Training-" + parameters["metric"]);
+                metrics.Add("Training-" + metric);
                 if (dvalid != null)
-                    metrics.Add("Validation-" + parameters["metric"]);
+                    metrics.Add("Validation-" + metric);
             }
 
             var header = new ProgressHeader(metrics.ToArray(), units.ToArray());
@@ -74,6 +82,11 @@ namespace Microsoft.ML.Trainers.LightGbm
                 if (earlyStoppingRound > 0)
                 {
                     validError = bst.EvalValid();
+                    if (double.IsNaN(validError) || double.IsInfinity(validError))
+                    {
+                        bst.Dispose();
+                        throw ch.Except($"LightGBM validation metric '{metric}' is not finite and cannot drive early stopping.");
+                    }
                     if (validError * factorToSmallerBetter < bestScore)
                     {
                         bestScore = validError * factorToSmallerBetter;
@@ -90,12 +103,24 @@ namespace Microsoft.ML.Trainers.LightGbm
                     if (verboseEval)
                     {
                         trainError = bst.EvalTrain();
+                        if (metric != null && (double.IsNaN(trainError) || double.IsInfinity(trainError)))
+                            ch.Warning("LightGBM training metric '{0}' is not finite.", metric);
                         if (dvalid == null)
+                        {
+                            if (metric != null)
+                                ch.Info("Iteration {0}: training {1}={2}", iter + 1, metric, trainError);
                             pch.Checkpoint(new double?[] { iter + 1, trainError });
+                        }
                         else
                         {
                             if (earlyStoppingRound == 0)
                                 validError = bst.EvalValid();
+                            if (metric != null)
+                            {
+                                if (double.IsNaN(validError) || double.IsInfinity(validError))
+                                    ch.Warning("LightGBM validation metric '{0}' is not finite.", metric);
+                                ch.Info("Iteration {0}: training {1}={2}, validation {1}={3}", iter + 1, metric, trainError, validError);
+                            }
                             pch.Checkpoint(new double?[] { iter + 1,
                                 trainError, validError });
                         }
@@ -111,5 +136,9 @@ namespace Microsoft.ML.Trainers.LightGbm
             }
             return bst;
         }
+
+        private static bool IsMaximizingMetric(string metric)
+            => metric == "auc" || metric == "average_precision" || metric == "auc_mu"
+                || metric.StartsWith("ndcg@", StringComparison.Ordinal) || metric.StartsWith("map@", StringComparison.Ordinal);
     }
 }

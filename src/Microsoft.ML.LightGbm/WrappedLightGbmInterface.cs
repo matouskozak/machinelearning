@@ -206,6 +206,10 @@ namespace Microsoft.ML.Trainers.LightGbm
         [DllImport(DllName, EntryPoint = "LGBM_BoosterGetEvalCounts", CallingConvention = CallingConvention.StdCall)]
         public static extern int BoosterGetEvalCounts(SafeBoosterHandle handle, ref int outLen);
 
+        [DllImport(DllName, EntryPoint = "LGBM_BoosterGetEvalNames", CallingConvention = CallingConvention.StdCall)]
+        public static extern unsafe int BoosterGetEvalNames(SafeBoosterHandle handle, int len, ref int outLen,
+            UIntPtr bufferLen, ref UIntPtr outBufferLen, byte** outStrs);
+
         [DllImport(DllName, EntryPoint = "LGBM_BoosterGetEval", CallingConvention = CallingConvention.StdCall)]
         public static extern unsafe int BoosterGetEval(SafeBoosterHandle handle, int dataIdx,
                                  ref int outLen, double* outResult);

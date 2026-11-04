@@ -21,25 +21,51 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         public WrappedLightGbmInterface.SafeBoosterHandle Handle { get; private set; }
         public int BestIteration { get; set; }
+        public string MetricName { get; }
 
         public Booster(Dictionary<string, object> parameters, Dataset trainset, Dataset validset = null)
         {
             var param = LightGbmInterfaceUtils.JoinParameters(parameters);
             LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterCreate(trainset.Handle, param, out var handle));
             Handle = handle;
-            if (validset != null)
+            try
             {
-                LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterAddValidData(Handle, validset.Handle));
-                _hasValid = true;
-            }
+                if (validset != null)
+                {
+                    LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterAddValidData(Handle, validset.Handle));
+                    _hasValid = true;
+                }
 
-            int numEval = 0;
-            BestIteration = -1;
-            LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEvalCounts(Handle, ref numEval));
-            // At most one metric in ML.NET.
-            Contracts.Assert(numEval <= 1);
-            if (numEval == 1)
-                _hasMetric = true;
+                int numEval = 0;
+                BestIteration = -1;
+                LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEvalCounts(Handle, ref numEval));
+                Contracts.Check(numEval >= 0 && numEval <= 1, "ML.NET LightGBM supports at most one scalar evaluation metric.");
+                _hasMetric = numEval == 1;
+                if (_hasMetric)
+                    MetricName = GetMetricName();
+            }
+            catch
+            {
+                Handle.Dispose();
+                throw;
+            }
+        }
+
+        private unsafe string GetMetricName()
+        {
+            // All supported metric names (including ranking cutoffs) fit in this buffer.
+            byte[] buffer = new byte[128];
+            int count = 0;
+            UIntPtr required = UIntPtr.Zero;
+            fixed (byte* ptr = buffer)
+            {
+                byte* name = ptr;
+                LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEvalNames(Handle, 1, ref count,
+                    new UIntPtr((uint)buffer.Length), ref required, &name));
+                Contracts.Check(count == 1 && required.ToUInt64() <= (ulong)buffer.Length,
+                    "Unexpected LightGBM evaluation metric name or count.");
+                return LightGbmInterfaceUtils.GetString((IntPtr)ptr);
+            }
         }
 
         public bool Update()
@@ -70,6 +96,7 @@ namespace Microsoft.ML.Trainers.LightGbm
             double[] res = new double[1];
             fixed (double* ptr = res)
                 LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEval(Handle, dataIdx, ref outLen, ptr));
+            Contracts.Check(outLen == 1, "Unexpected LightGBM evaluation result length.");
             return res[0];
         }
 
