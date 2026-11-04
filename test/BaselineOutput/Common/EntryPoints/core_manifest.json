@@ -13385,7 +13385,7 @@
         {
           "Name": "Alpha",
           "Type": "Float",
-          "Desc": "Quantile level or Huber parameter, in (0, 1).",
+          "Desc": "Quantile level, in (0, 1) at native float precision.",
           "Required": false,
           "SortOrder": 150.0,
           "IsNullable": false,
@@ -13402,9 +13402,7 @@
               "RootMeanSquaredError",
               "MeanSquaredError",
               "MeanAbsolutePercentageError",
-              "Quantile",
-              "Huber",
-              "Fair"
+              "Quantile"
             ]
           },
           "Desc": "Evaluation metrics.",
@@ -13429,9 +13427,7 @@
                 "RootMeanSquaredError",
                 "MeanSquaredError",
                 "MeanAbsolutePercentageError",
-                "Quantile",
-                "Huber",
-                "Fair"
+                "Quantile"
               ]
             }
           },

@@ -95,8 +95,6 @@ namespace Microsoft.ML.Tests.TrainerEstimators
         [LightGBMTheory]
         [InlineData(RegressionMetric.MeanAbsolutePercentageError, "mape")]
         [InlineData(RegressionMetric.Quantile, "quantile")]
-        [InlineData(RegressionMetric.Huber, "huber")]
-        [InlineData(RegressionMetric.Fair, "fair")]
         public void RegressionDefaultResolvesBeforeDeduplication(RegressionMetric extra, string nativeName)
         {
             var ml = CreateContext(out var log);
@@ -585,12 +583,34 @@ namespace Microsoft.ML.Tests.TrainerEstimators
         [InlineData(double.NaN)]
         [InlineData(double.NegativeInfinity)]
         [InlineData(double.PositiveInfinity)]
+        [InlineData(double.Epsilon)]
+        [InlineData(1e-50)]
+        [InlineData(0.9999999999999999)]
         public void RegressionRejectsInvalidAlpha(double alpha)
         {
             var ml = new MLContext(seed: 17);
             var error = Assert.Throws<ArgumentOutOfRangeException>(() => ml.Regression.Trainers.LightGbm(
                 new LightGbmRegressionTrainer.Options { Objective = RegressionObjective.Quantile, Alpha = alpha }));
             Assert.Equal("Alpha", error.ParamName);
+        }
+
+        [LightGBMTheory]
+        [InlineData(1.1754943508222875e-38)]
+        [InlineData(0.9999999403953552)]
+        public void QuantileAcceptsNativeFloatBoundaryValues(double alpha)
+        {
+            var ml = CreateContext(out var log);
+            var data = ml.Data.LoadFromEnumerable(RegressionRows());
+            var options = RegressionOptions();
+            options.Objective = RegressionObjective.Quantile;
+            options.Alpha = alpha;
+            options.EvaluationMetric = RegressionMetric.Quantile;
+            options.AdditionalEvaluationMetrics = new[] { RegressionMetric.RootMeanSquaredError };
+
+            var model = ml.Regression.Trainers.LightGbm(options).Fit(data, data);
+
+            AssertMetricReports(log, "quantile", "rmse");
+            Scores(model, data);
         }
 
         [Fact]

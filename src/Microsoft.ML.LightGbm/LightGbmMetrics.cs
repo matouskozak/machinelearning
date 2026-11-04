@@ -75,8 +75,6 @@ namespace Microsoft.ML.Trainers.LightGbm
                 case "l2":
                 case "rmse":
                 case "mape":
-                case "huber":
-                case "fair":
                 case "quantile":
                 case "binary_logloss":
                 case "binary_error":

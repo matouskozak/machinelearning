@@ -26,9 +26,9 @@ The prototype also rejects stopping with no metric or a nonfinite primary score.
 Undefined diagnostic metrics are reported with a warning and do not select the model.
 
 Regression adds `Objective = RegressionObjective.Quantile` and `Alpha` (default
-0.5, strictly between zero and one). All quantile and Huber metrics in one Fit use
-that same alpha. New diagnostic choices include quantile, Huber, Fair (native scale
-1), MAPE, binary average precision, and multiclass AUC-mu (equal class-pair weights).
+0.5, strictly between zero and one at native float precision). Quantile training
+and evaluation in one Fit use that same alpha. New diagnostic choices are quantile,
+MAPE, binary average precision, and multiclass AUC-mu (equal class-pair weights).
 Ranking retains cutoff 5 for both NDCG and MAP. This is intentionally a bounded
 subset, not arbitrary native parameter access or additions to ML.NET `Evaluate()`.
 

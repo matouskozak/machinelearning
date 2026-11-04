@@ -131,11 +131,7 @@ namespace Microsoft.ML.Trainers.LightGbm
                 /// <summary>Mean absolute percentage error.</summary>
                 MeanAbsolutePercentageError,
                 /// <summary>Quantile loss, using <see cref="Alpha"/>.</summary>
-                Quantile,
-                /// <summary>Huber loss, using <see cref="Alpha"/>.</summary>
-                Huber,
-                /// <summary>Fair loss with the native default scale of 1.</summary>
-                Fair
+                Quantile
             };
 
             /// <summary>The regression training objective.</summary>
@@ -152,10 +148,10 @@ namespace Microsoft.ML.Trainers.LightGbm
             public RegressionObjective Objective = RegressionObjective.Regression;
 
             /// <summary>
-            /// Quantile level, or Huber loss parameter. Must be finite and strictly between zero and one.
-            /// Used by the quantile objective and by quantile and Huber evaluation metrics.
+            /// Quantile level for the objective and evaluation metric. Must remain strictly between zero
+            /// and one after conversion to native single precision.
             /// </summary>
-            [Argument(ArgumentType.AtMostOnce, HelpText = "Quantile level or Huber parameter, in (0, 1).")]
+            [Argument(ArgumentType.AtMostOnce, HelpText = "Quantile level, in (0, 1) at native float precision.")]
             public double Alpha = 0.5;
 
             /// <summary>
@@ -188,8 +184,6 @@ namespace Microsoft.ML.Trainers.LightGbm
                 NameMapping.Add(nameof(EvaluateMetricType.MeanSquaredError), "mse");
                 NameMapping.Add(nameof(EvaluateMetricType.MeanAbsolutePercentageError), "mape");
                 NameMapping.Add(nameof(EvaluateMetricType.Quantile), "quantile");
-                NameMapping.Add(nameof(EvaluateMetricType.Huber), "huber");
-                NameMapping.Add(nameof(EvaluateMetricType.Fair), "fair");
             }
 
             internal override Dictionary<string, object> ToDictionary(IHost host)
@@ -241,8 +235,9 @@ namespace Microsoft.ML.Trainers.LightGbm
         {
             Contracts.CheckUserArg(Enum.IsDefined(typeof(Options.RegressionObjective), options.Objective),
                 nameof(options.Objective), "Unknown regression objective.");
-            Contracts.CheckUserArg(options.Alpha > 0 && options.Alpha < 1,
-                nameof(options.Alpha), "must be finite and in (0, 1).");
+            float nativeAlpha = (float)options.Alpha;
+            Contracts.CheckUserArg(nativeAlpha > 0 && nativeAlpha < 1,
+                nameof(options.Alpha), "must remain in (0, 1) at native float precision.");
             _objective = options.Objective;
             _alpha = options.Alpha;
         }
