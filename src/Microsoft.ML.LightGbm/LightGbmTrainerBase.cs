@@ -199,9 +199,9 @@ namespace Microsoft.ML.Trainers.LightGbm
             /// <summary>
             /// Optional constraints indexed by the original Features vector slots. The length must match
             /// the vector size. Categorical slots must be None, even when categorical splitting is disabled.
-            /// Numeric slots are mapped through any native categorical collapsing. Quantile training
-            /// does not support nonzero constraints. Null or an all-None vector imposes no constraints.
-            /// Constraints apply to raw tree scores, not to multiclass probabilities after normalization.
+            /// Numeric slots are mapped through any native categorical collapsing. Nonzero constraints
+            /// are supported only for squared-error regression, binary classification, and ranking.
+            /// Quantile and multiclass training reject them. Null or an all-None vector imposes no constraints.
             /// </summary>
             [Argument(ArgumentType.Multiple, HelpText = "Monotonic directions for numeric feature slots.")]
             public MonotoneConstraint[] MonotoneConstraints;
@@ -673,6 +673,7 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         private CategoricalMetaData GetCategoricalMetaData(IChannel ch, RoleMappedData trainData, int numRow)
         {
+            GbmOptions.Remove("categorical_feature");
             CategoricalMetaData catMetaData = new CategoricalMetaData();
             int[] categoricalFeatures = null;
             const int useCatThreshold = 50000;
@@ -746,6 +747,8 @@ namespace Microsoft.ML.Trainers.LightGbm
                 return;
             ch.CheckUserArg((string)GbmOptions["objective"] != "quantile", nameof(OptionsBase.MonotoneConstraints),
                 "Quantile regression does not support monotone constraints.");
+            ch.CheckUserArg(PredictionKind != PredictionKind.MulticlassClassification, nameof(OptionsBase.MonotoneConstraints),
+                "Multiclass training does not support monotone constraints.");
 
             var feature = data.Schema.Feature.Value;
             if (AnnotationUtils.TryGetCategoricalFeatureIndices(data.Schema.Schema, feature.Index, out var categorical))

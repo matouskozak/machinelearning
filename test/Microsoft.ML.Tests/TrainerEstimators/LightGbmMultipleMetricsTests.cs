@@ -540,6 +540,76 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             }
         }
 
+        [LightGBMTheory]
+        [InlineData(MonotoneConstraint.None)]
+        [InlineData(MonotoneConstraint.Increasing)]
+        [InlineData(MonotoneConstraint.Decreasing)]
+        public void MulticlassRejectsOnlyActiveMonotoneConstraints(MonotoneConstraint direction)
+        {
+            var ml = CreateContext(out _);
+            var data = ml.Data.LoadFromEnumerable(Enumerable.Range(0, 60).Select(i => new MulticlassRow
+            {
+                Label = (uint)(i % 3),
+                Features = new[] { (float)(i % 3), (float)(i % 5) }
+            }));
+            var trainer = ml.MulticlassClassification.Trainers.LightGbm(new LightGbmMulticlassTrainer.Options
+            {
+                NumberOfIterations = 5,
+                MinimumExampleCountPerLeaf = 2,
+                MonotoneConstraints = new[] { direction, MonotoneConstraint.None }
+            });
+
+            if (direction == MonotoneConstraint.None)
+            {
+                trainer.Fit(data);
+                Assert.False(trainer.GetGbmParameters().ContainsKey("monotone_constraints"));
+            }
+            else
+            {
+                var error = Assert.Throws<ArgumentOutOfRangeException>(() => trainer.Fit(data));
+                Assert.Equal("MonotoneConstraints", error.ParamName);
+                Assert.Contains("Multiclass", error.Message);
+            }
+        }
+
+        [LightGBMFact]
+        public void RepeatedConstrainedFitClearsPreviousCategoricalFeatures()
+        {
+            var ml = CreateContext(out _);
+            var rows = ml.Data.LoadFromEnumerable(Enumerable.Range(0, 90).Select(i => new CategoricalRow
+            {
+                Left = i % 5,
+                Category = "category" + i % 3,
+                Right = i / 15,
+                Label = 2 * (i % 5) - i / 15
+            }));
+            var encoding = ml.Transforms.Categorical.OneHotEncoding("EncodedCategory", nameof(CategoricalRow.Category))
+                .Append(ml.Transforms.Concatenate("Features", nameof(CategoricalRow.Left), "EncodedCategory", nameof(CategoricalRow.Right)));
+            var categorical = encoding.Fit(rows).Transform(rows);
+            var options = RegressionOptions();
+            options.UseCategoricalSplit = true;
+            options.MonotoneConstraints = new[] { MonotoneConstraint.Increasing, MonotoneConstraint.None,
+                MonotoneConstraint.None, MonotoneConstraint.None, MonotoneConstraint.Decreasing };
+            var trainer = ml.Regression.Trainers.LightGbm(options);
+            trainer.Fit(categorical);
+            Assert.Equal("1", trainer.GetGbmParameters()["categorical_feature"]);
+            Assert.Equal("1,0,-1", trainer.GetGbmParameters()["monotone_constraints"]);
+
+            var schema = SchemaDefinition.Create(typeof(RegressionRow));
+            schema[nameof(RegressionRow.Features)].ColumnType = new VectorDataViewType(NumberDataViewType.Single, 5);
+            var numeric = ml.Data.LoadFromEnumerable(Enumerable.Range(0, 96).Select(i => new RegressionRow
+            {
+                Features = new[] { (float)(i % 6 - 3), (float)(i % 9 - 4), (float)(i % 4), 0f, (float)(i / 12) },
+                Label = 2 * (i % 6 - 3) + 5 * (i % 9 - 4) - i / 12
+            }), schema);
+            var reused = trainer.Fit(numeric);
+            var fresh = ml.Regression.Trainers.LightGbm(options).Fit(numeric);
+
+            Assert.False(trainer.GetGbmParameters().ContainsKey("categorical_feature"));
+            Assert.Equal("1,0,0,0,-1", trainer.GetGbmParameters()["monotone_constraints"]);
+            Assert.Equal(Scores(fresh, numeric), Scores(reused, numeric));
+        }
+
         [Theory]
         [InlineData(0, 2, "AdditionalEvaluationMetrics")]
         [InlineData(1, 0, "AdditionalEvaluationMetrics")]

@@ -36,9 +36,11 @@ subset, not arbitrary native parameter access or additions to ML.NET `Evaluate()
 Numeric slots can be `Increasing`, `Decreasing`, or `None`. Categorical slots
 must be `None`, including when categorical splitting is disabled. Numeric
 constraints are remapped if categorical slots collapse during training.
-Quantile training cannot use nonzero constraints. The constraints apply to
-the post-transform feature values, not necessarily the original input columns.
-They constrain raw tree scores, not normalized multiclass probabilities.
+Nonzero constraints are supported only for squared-error regression, binary
+classification, and ranking. Although the option is inherited by multiclass
+trainers, multiclass and quantile training reject active constraints. Null or an
+all-`None` vector is allowed. Constraints apply to post-transform feature values,
+not necessarily the original input columns.
 
 See `Dynamic/Trainers/Regression/LightGbmMultipleMetrics.cs` in the samples for
 quantile monitoring and a separate monotone regression example.
