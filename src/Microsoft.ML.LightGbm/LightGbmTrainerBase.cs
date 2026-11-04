@@ -76,6 +76,8 @@ namespace Microsoft.ML.Trainers.LightGbm
 
             private protected OptionsBase() { }
 
+            internal virtual MonotoneConstraint[] GetMonotoneConstraints() => null;
+
             /// <summary>
             /// The number of boosting iterations. A new tree is created in each iteration, so this is equivalent to the number of trees.
             /// </summary>
@@ -411,6 +413,8 @@ namespace Microsoft.ML.Trainers.LightGbm
                         // Format in the file is objective=multiclass num_class:4
                         var split = lines[i].Split(' ');
                         GbmOptions["objective"] = split[0].Split('=')[1];
+                        Host.CheckParam((string)GbmOptions["objective"] != "quantile" || Array.IndexOf(split, "sqrt") < 0,
+                            nameof(LightGbmTrainerOptions.LightGbmModel), "Quantile models with a square-root output transform are not supported.");
 
                         var modelParameters = Booster.GetParameters(modelText);
                         // Going to set the parameters via reflection so that we don't have manually set them on the options object
@@ -419,6 +423,11 @@ namespace Microsoft.ML.Trainers.LightGbm
 
                         foreach (var field in optionsFields)
                         {
+                            // These fields configure training, not the imported tree ensemble.
+                            if (field.FieldType == typeof(LightGbmRegressionTrainer.Options.RegressionObjective) ||
+                                field.FieldType == typeof(MonotoneConstraint[]))
+                                continue;
+
                             var lightGbmName = LightGbmTrainerOptions.GetOptionName(field.Name);
                             if (modelParameters.ContainsKey(lightGbmName))
                             {
@@ -426,15 +435,15 @@ namespace Microsoft.ML.Trainers.LightGbm
                                 {
                                     if (field.FieldType.GenericTypeArguments[0] == typeof(double))
                                     {
-                                        field.SetValue(LightGbmTrainerOptions, Double.Parse(modelParameters[lightGbmName]));
+                                        field.SetValue(LightGbmTrainerOptions, Double.Parse(modelParameters[lightGbmName], CultureInfo.InvariantCulture));
                                     }
                                     else if (field.FieldType.GenericTypeArguments[0] == typeof(int))
                                     {
-                                        field.SetValue(LightGbmTrainerOptions, int.Parse(modelParameters[lightGbmName]));
+                                        field.SetValue(LightGbmTrainerOptions, int.Parse(modelParameters[lightGbmName], CultureInfo.InvariantCulture));
                                     }
                                     else if (field.FieldType.GenericTypeArguments[0] == typeof(float))
                                     {
-                                        field.SetValue(LightGbmTrainerOptions, float.Parse(modelParameters[lightGbmName]));
+                                        field.SetValue(LightGbmTrainerOptions, float.Parse(modelParameters[lightGbmName], CultureInfo.InvariantCulture));
                                     }
                                     // TODO: throw for unknown type
                                 }
@@ -446,7 +455,7 @@ namespace Microsoft.ML.Trainers.LightGbm
                                         field.SetValue(LightGbmTrainerOptions, false);
                                 }
                                 else
-                                    field.SetValue(LightGbmTrainerOptions, Convert.ChangeType(modelParameters[lightGbmName], field.FieldType));
+                                    field.SetValue(LightGbmTrainerOptions, Convert.ChangeType(modelParameters[lightGbmName], field.FieldType, CultureInfo.InvariantCulture));
                             }
                         }
 
@@ -457,6 +466,9 @@ namespace Microsoft.ML.Trainers.LightGbm
                 }
                 else
                 {
+                    Host.CheckUserArg(context.ValidationSet == null || LightGbmTrainerOptions.EarlyStoppingRound == 0 ||
+                        (string)GbmOptions["metric"] != "None", nameof(LightGbmTrainerOptions.EarlyStoppingRound),
+                        "Early stopping requires an evaluation metric. Select a metric other than None.");
                     CategoricalMetaData catMetaData;
 
                     using (var ch = Host.Start("Loading data for LightGBM"))
@@ -488,6 +500,8 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         // For loading addtional info when we are loading a pre-trained model.
         private protected virtual void AdditionalLoadPreTrainedModel(string modelText) { }
+
+        private protected virtual void CheckMetricData(IChannel ch, float[] labels, float[] weights) { }
 
         private void InitParallelTraining()
         {
@@ -633,6 +647,7 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         private CategoricalMetaData GetCategoricalMetaData(IChannel ch, RoleMappedData trainData, int numRow)
         {
+            GbmOptions.Remove("categorical_feature");
             CategoricalMetaData catMetaData = new CategoricalMetaData();
             int[] categoricalFeatures = null;
             const int useCatThreshold = 50000;
@@ -678,6 +693,8 @@ namespace Microsoft.ML.Trainers.LightGbm
             GetDefaultParameters(ch, numRow, catMetaData.CategoricalBoudaries != null, catMetaData.TotalCats);
 
             CheckAndUpdateParametersBeforeTraining(ch, trainData, labels, groups);
+            CheckMonotoneConstraints(ch, trainData);
+            CheckMetricData(ch, labels, weights);
             string param = LightGbmInterfaceUtils.JoinParameters(GbmOptions);
 
             Dataset dtrain;
@@ -694,6 +711,46 @@ namespace Microsoft.ML.Trainers.LightGbm
             return dtrain;
         }
 
+        private void CheckMonotoneConstraints(IChannel ch, RoleMappedData data)
+        {
+            GbmOptions.Remove("monotone_constraints");
+            var constraints = LightGbmTrainerOptions.GetMonotoneConstraints();
+            if (constraints == null || constraints.Length == 0)
+                return;
+
+            if (constraints.Length != FeatureCount)
+                throw ch.ExceptUserArg(nameof(LightGbmRegressionTrainer.Options.MonotoneConstraints),
+                    "Expected {0} entries in final Features vector slot order, received {1}.", FeatureCount, constraints.Length);
+            bool active = false;
+            for (int i = 0; i < constraints.Length; i++)
+            {
+                if (constraints[i] < MonotoneConstraint.Decreasing || constraints[i] > MonotoneConstraint.Increasing)
+                    throw ch.ExceptUserArg(nameof(LightGbmRegressionTrainer.Options.MonotoneConstraints),
+                        "Invalid constraint at feature slot {0}. Use Decreasing, None, or Increasing.", i);
+                active |= constraints[i] != MonotoneConstraint.None;
+            }
+            if (!active)
+                return;
+
+            ch.CheckUserArg(LightGbmTrainerOptions.UseCategoricalSplit == false, nameof(LightGbmRegressionTrainer.Options.MonotoneConstraints),
+                "Active constraints require UseCategoricalSplit=false so final feature slot indices are preserved.");
+            ch.CheckUserArg((string)GbmOptions["objective"] != "quantile", nameof(LightGbmRegressionTrainer.Options.MonotoneConstraints),
+                "Monotone constraints are not supported with the quantile objective.");
+
+            var feature = data.Schema.Feature.Value;
+            AnnotationUtils.TryGetCategoricalFeatureIndices(data.Schema.Schema, feature.Index, out int[] categoricalSlots);
+            if (categoricalSlots != null)
+            {
+                for (int range = 0; range < categoricalSlots.Length; range += 2)
+                    for (int slot = categoricalSlots[range]; slot <= categoricalSlots[range + 1]; slot++)
+                        if (constraints[slot] != MonotoneConstraint.None)
+                            throw ch.ExceptUserArg(nameof(LightGbmRegressionTrainer.Options.MonotoneConstraints),
+                                "Feature slot {0} is categorical. Only numeric slots may have active constraints.", slot);
+            }
+
+            GbmOptions["monotone_constraints"] = string.Join(",", constraints.Select(c => ((int)c).ToString(CultureInfo.InvariantCulture)));
+        }
+
         private Dataset LoadValidationData(IChannel ch, Dataset dtrain, RoleMappedData validData, CategoricalMetaData catMetaData)
         {
             // Verifications.
@@ -706,6 +763,7 @@ namespace Microsoft.ML.Trainers.LightGbm
             // Load meta info first.
             var factory = CreateCursorFactory(validData);
             GetMetainfo(ch, factory, out int numRow, out float[] labels, out float[] weights, out int[] groups);
+            CheckMetricData(ch, labels, weights);
 
             // Construct validation dataset.
             Dataset dvalid = new Dataset(dtrain, numRow, labels, weights);

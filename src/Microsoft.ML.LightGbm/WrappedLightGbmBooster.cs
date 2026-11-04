@@ -36,8 +36,12 @@ namespace Microsoft.ML.Trainers.LightGbm
             int numEval = 0;
             BestIteration = -1;
             LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEvalCounts(Handle, ref numEval));
-            // At most one metric in ML.NET.
-            Contracts.Assert(numEval <= 1);
+            int expectedCount = LightGbmInterfaceUtils.GetMetricName(parameters) == "None" ? 0 : 1;
+            if (numEval != expectedCount)
+            {
+                Handle.Dispose();
+                throw Contracts.Except("Expected {0} LightGBM evaluation metrics, received {1}. Only a single metric is supported.", expectedCount, numEval);
+            }
             if (numEval == 1)
                 _hasMetric = true;
         }
@@ -70,6 +74,8 @@ namespace Microsoft.ML.Trainers.LightGbm
             double[] res = new double[1];
             fixed (double* ptr = res)
                 LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterGetEval(Handle, dataIdx, ref outLen, ptr));
+            Contracts.Check(outLen == 1, "LightGBM returned an unexpected evaluation result count.");
+            Contracts.Check(!double.IsNaN(res[0]) && !double.IsInfinity(res[0]), "LightGBM returned a non-finite evaluation metric. Check labels and weights.");
             return res[0];
         }
 
@@ -239,6 +245,8 @@ namespace Microsoft.ML.Trainers.LightGbm
                         kvPairs[kv[0].Trim()] = kv[1].Trim();
                         ++i;
                     }
+                    Contracts.Check(!kvPairs.TryGetValue("is_linear", out string isLinear) || isLinear == "0",
+                        "Linear-leaf LightGBM models cannot be imported into the managed constant-leaf predictor.");
                     int numberOfLeaves = int.Parse(kvPairs["num_leaves"], CultureInfo.InvariantCulture);
                     int numCat = int.Parse(kvPairs["num_cat"], CultureInfo.InvariantCulture);
                     if (numberOfLeaves > 1)

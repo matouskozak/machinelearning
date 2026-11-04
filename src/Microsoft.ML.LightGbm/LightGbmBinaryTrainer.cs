@@ -134,7 +134,21 @@ namespace Microsoft.ML.Trainers.LightGbm
                 Logloss,
                 Error,
                 AreaUnderCurve,
+
+                /// <summary>Native average precision, maximized for early stopping.</summary>
+                AveragePrecision = 5,
             };
+
+            /// <summary>
+            /// Constraints in final Features vector slot order, or null/empty to disable.
+            /// A nonempty array must have one entry per slot. Active constraints require UseCategoricalSplit=false
+            /// and cannot target annotated categorical slots. Unannotated categories cannot be detected.
+            /// Constraints apply to Score and Probability with other slots fixed, not to inputs before preprocessing.
+            /// </summary>
+            [Argument(ArgumentType.Multiple, HelpText = "Monotone constraints in final feature slot order.")]
+            public MonotoneConstraint[] MonotoneConstraints;
+
+            internal override MonotoneConstraint[] GetMonotoneConstraints() => MonotoneConstraints;
 
             /// <summary>
             /// Whether training data is unbalanced.
@@ -177,11 +191,13 @@ namespace Microsoft.ML.Trainers.LightGbm
                 NameMapping.Add(nameof(EvaluateMetricType.Logloss), "binary_logloss");
                 NameMapping.Add(nameof(EvaluateMetricType.Error), "binary_error");
                 NameMapping.Add(nameof(EvaluateMetricType.AreaUnderCurve), "auc");
+                NameMapping.Add(nameof(EvaluateMetricType.AveragePrecision), "average_precision");
                 NameMapping.Add(nameof(WeightOfPositiveExamples), "scale_pos_weight");
             }
 
             internal override Dictionary<string, object> ToDictionary(IHost host)
             {
+                Contracts.CheckUserArg(Enum.IsDefined(typeof(EvaluateMetricType), EvaluationMetric), nameof(EvaluationMetric), "Unknown evaluation metric.");
                 var res = base.ToDictionary(host);
                 res[GetOptionName(nameof(UnbalancedSets))] = UnbalancedSets;
                 res[GetOptionName(nameof(WeightOfPositiveExamples))] = WeightOfPositiveExamples;

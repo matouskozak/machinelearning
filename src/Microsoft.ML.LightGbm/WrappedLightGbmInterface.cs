@@ -231,6 +231,33 @@ namespace Microsoft.ML.Trainers.LightGbm
 
     internal static class LightGbmInterfaceUtils
     {
+        internal static string GetMetricName(Dictionary<string, object> parameters)
+        {
+            var metric = (string)parameters["metric"];
+            if (string.IsNullOrEmpty(metric))
+                metric = (string)parameters["objective"];
+            switch (metric)
+            {
+                case "regression":
+                case "mse":
+                    return "l2";
+                case "mae":
+                    return "l1";
+                case "binary":
+                    return "binary_logloss";
+                case "multiclass":
+                case "multiclassova":
+                    return "multi_logloss";
+                case "lambdarank":
+                    return "ndcg";
+                default:
+                    return metric;
+            }
+        }
+
+        internal static bool IsHigherBetter(string metric)
+            => metric == "auc" || metric == "average_precision" || metric == "auc_mu" || metric == "ndcg" || metric == "map";
+
         /// <summary>
         /// Checks if LightGBM has a pending error message. Raises an exception in that case.
         /// </summary>

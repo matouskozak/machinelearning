@@ -11611,6 +11611,25 @@
           "Default": "Auto"
         },
         {
+          "Name": "MonotoneConstraints",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Increasing",
+                "Decreasing"
+              ]
+            }
+          },
+          "Desc": "Monotone constraints in final feature slot order.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
+        },
+        {
           "Name": "UnbalancedSets",
           "Type": "Bool",
           "Desc": "Use for binary classification when training data is not balanced.",
@@ -11655,7 +11674,8 @@
               "Default",
               "Logloss",
               "Error",
-              "AreaUnderCurve"
+              "AreaUnderCurve",
+              "AveragePrecision"
             ]
           },
           "Desc": "Evaluation metrics.",
@@ -12201,7 +12221,8 @@
               "None",
               "Default",
               "Error",
-              "LogLoss"
+              "LogLoss",
+              "AreaUnderCurveMu"
             ]
           },
           "Desc": "Evaluation metrics.",
@@ -12698,6 +12719,25 @@
           "SortOrder": 6.0,
           "IsNullable": false,
           "Default": "Auto"
+        },
+        {
+          "Name": "MonotoneConstraints",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Increasing",
+                "Decreasing"
+              ]
+            }
+          },
+          "Desc": "Monotone constraints in final feature slot order.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
         },
         {
           "Name": "CustomGains",
@@ -13246,6 +13286,49 @@
           "Default": "Auto"
         },
         {
+          "Name": "Objective",
+          "Type": {
+            "Kind": "Enum",
+            "Values": [
+              "Regression",
+              "Quantile"
+            ]
+          },
+          "Desc": "Regression training objective.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": "Regression"
+        },
+        {
+          "Name": "Alpha",
+          "Type": "Float",
+          "Desc": "Quantile level, strictly between zero and one.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": 0.5
+        },
+        {
+          "Name": "MonotoneConstraints",
+          "Type": {
+            "Kind": "Array",
+            "ItemType": {
+              "Kind": "Enum",
+              "Values": [
+                "None",
+                "Increasing",
+                "Decreasing"
+              ]
+            }
+          },
+          "Desc": "Monotone constraints in final feature slot order.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": null
+        },
+        {
           "Name": "EvaluationMetric",
           "Type": {
             "Kind": "Enum",
@@ -13254,7 +13337,9 @@
               "Default",
               "MeanAbsoluteError",
               "RootMeanSquaredError",
-              "MeanSquaredError"
+              "MeanSquaredError",
+              "MeanAbsolutePercentageError",
+              "Quantile"
             ]
           },
           "Desc": "Evaluation metrics.",

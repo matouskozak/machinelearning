@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.ML;
@@ -126,11 +127,55 @@ namespace Microsoft.ML.Trainers.LightGbm
                 Default,
                 MeanAbsoluteError,
                 RootMeanSquaredError,
-                MeanSquaredError
+                MeanSquaredError,
+
+                /// <summary>Mean absolute error divided by max(1, abs(label)), expressed as a ratio.</summary>
+                MeanAbsolutePercentageError = 5,
+
+                /// <summary>Pinball loss at <see cref="Alpha"/>.</summary>
+                Quantile = 6
             };
 
+            /// <summary>The objective optimized during regression training.</summary>
+            public enum RegressionObjective
+            {
+                /// <summary>Minimize squared error.</summary>
+                Regression = 0,
+
+                /// <summary>Estimate the conditional quantile specified by <see cref="Alpha"/>.</summary>
+                Quantile = 1
+            }
+
             /// <summary>
-            /// Determines what evaluation metric to use.
+            /// The training objective. Changing it does not change <see cref="EvaluationMetric"/>.
+            /// Quantile training does not support monotone constraints.
+            /// </summary>
+            [Argument(ArgumentType.AtMostOnce, HelpText = "Regression training objective.")]
+            public RegressionObjective Objective = RegressionObjective.Regression;
+
+            /// <summary>
+            /// Quantile level for the quantile objective or evaluation metric, defaulting to the median.
+            /// Must be strictly between zero and one, including after conversion to native single precision.
+            /// Ignored when neither the objective nor the metric is quantile.
+            /// </summary>
+            [Argument(ArgumentType.AtMostOnce, HelpText = "Quantile level, strictly between zero and one.")]
+            public double Alpha = 0.5;
+
+            /// <summary>
+            /// Constraints in final Features vector slot order. Null or empty disables constraints.
+            /// A nonempty array must have one entry per slot. Active constraints require UseCategoricalSplit=false
+            /// and cannot target annotated categorical slots. Unannotated categories cannot be detected.
+            /// Constraints apply to Score, not to the original inputs before preprocessing.
+            /// </summary>
+            [Argument(ArgumentType.Multiple, HelpText = "Monotone constraints in final feature slot order.")]
+            public MonotoneConstraint[] MonotoneConstraints;
+
+            internal override MonotoneConstraint[] GetMonotoneConstraints() => MonotoneConstraints;
+
+            /// <summary>
+            /// Determines the single training/validation metric and early-stopping criterion.
+            /// The default remains RMSE even for quantile training. Select Quantile or Default explicitly
+            /// to evaluate pinball loss with that objective. This does not change ML.NET Evaluate() results.
             /// </summary>
             [Argument(ArgumentType.AtMostOnce,
                 HelpText = "Evaluation metrics.",
@@ -145,14 +190,27 @@ namespace Microsoft.ML.Trainers.LightGbm
                 NameMapping.Add(nameof(EvaluateMetricType.MeanAbsoluteError), "mae");
                 NameMapping.Add(nameof(EvaluateMetricType.RootMeanSquaredError), "rmse");
                 NameMapping.Add(nameof(EvaluateMetricType.MeanSquaredError), "mse");
+                NameMapping.Add(nameof(EvaluateMetricType.MeanAbsolutePercentageError), "mape");
+                NameMapping.Add(nameof(EvaluateMetricType.Quantile), "quantile");
             }
 
             internal override Dictionary<string, object> ToDictionary(IHost host)
             {
+                CheckObjectiveAndAlpha();
+                Contracts.CheckUserArg(Enum.IsDefined(typeof(EvaluateMetricType), EvaluationMetric), nameof(EvaluationMetric), "Unknown evaluation metric.");
                 var res = base.ToDictionary(host);
                 res[GetOptionName(nameof(EvaluateMetricType))] = GetOptionName(EvaluationMetric.ToString());
+                if (Objective == RegressionObjective.Quantile || EvaluationMetric == EvaluateMetricType.Quantile)
+                    res["alpha"] = Alpha;
 
                 return res;
+            }
+
+            internal void CheckObjectiveAndAlpha()
+            {
+                Contracts.CheckUserArg(Enum.IsDefined(typeof(RegressionObjective), Objective), nameof(Objective), "Unknown regression objective.");
+                Contracts.CheckUserArg(Alpha > 0 && Alpha < 1 && (float)Alpha > 0 && (float)Alpha < 1,
+                    nameof(Alpha), "Must be strictly between zero and one, including in native single precision.");
             }
         }
 
@@ -240,7 +298,11 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         private protected override void CheckAndUpdateParametersBeforeTraining(IChannel ch, RoleMappedData data, float[] labels, int[] groups)
         {
-            GbmOptions["objective"] = "regression";
+            LightGbmTrainerOptions.CheckObjectiveAndAlpha();
+            GbmOptions["objective"] = LightGbmTrainerOptions.Objective == Options.RegressionObjective.Quantile ? "quantile" : "regression";
+            GbmOptions.Remove("alpha");
+            if (LightGbmTrainerOptions.Objective == Options.RegressionObjective.Quantile || (string)GbmOptions["metric"] == "quantile")
+                GbmOptions["alpha"] = LightGbmTrainerOptions.Alpha;
         }
 
         private protected override SchemaShape.Column[] GetOutputColumnsCore(SchemaShape inputSchema)

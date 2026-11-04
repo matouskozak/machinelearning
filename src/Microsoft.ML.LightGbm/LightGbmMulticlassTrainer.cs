@@ -80,6 +80,12 @@ namespace Microsoft.ML.Trainers.LightGbm
                 Default,
                 Error,
                 LogLoss,
+
+                /// <summary>
+                /// Native AUC-mu with equal class-error weights, maximized for early stopping.
+                /// Every configured class must have positive total weight in both training and validation data.
+                /// </summary>
+                AreaUnderCurveMu = 4,
             }
 
             /// <summary>
@@ -117,10 +123,12 @@ namespace Microsoft.ML.Trainers.LightGbm
                 NameMapping.Add(nameof(EvaluateMetricType.Default), "");
                 NameMapping.Add(nameof(EvaluateMetricType.Error), "multi_error");
                 NameMapping.Add(nameof(EvaluateMetricType.LogLoss), "multi_logloss");
+                NameMapping.Add(nameof(EvaluateMetricType.AreaUnderCurveMu), "auc_mu");
             }
 
             internal override Dictionary<string, object> ToDictionary(IHost host)
             {
+                Contracts.CheckUserArg(Enum.IsDefined(typeof(EvaluateMetricType), EvaluationMetric), nameof(EvaluationMetric), "Unknown evaluation metric.");
                 var res = base.ToDictionary(host);
 
                 res[GetOptionName(nameof(UnbalancedSets))] = UnbalancedSets;
@@ -360,6 +368,28 @@ namespace Microsoft.ML.Trainers.LightGbm
                 GbmOptions["objective"] = "multiclass";
             else
                 GbmOptions["objective"] = "multiclassova";
+        }
+
+        private protected override void CheckMetricData(IChannel ch, float[] labels, float[] weights)
+        {
+            if ((string)GbmOptions["metric"] != "auc_mu")
+                return;
+
+            var classWeights = new double[_numberOfClassesIncludingNan];
+            for (int i = 0; i < labels.Length; i++)
+            {
+                float label = labels[i];
+                ch.CheckParam(label >= 0 && label < classWeights.Length && label == (int)label, nameof(labels),
+                    "AUC-mu requires labels in the configured class range.");
+                float weight = weights == null ? 1 : weights[i];
+                ch.CheckParam(weight >= 0 && !float.IsInfinity(weight), nameof(weights),
+                    "AUC-mu requires finite nonnegative weights.");
+                classWeights[(int)label] += weight;
+            }
+            for (int i = 0; i < classWeights.Length; i++)
+                if (classWeights[i] <= 0)
+                    throw ch.ExceptParam(nameof(labels),
+                        "AUC-mu requires positive total weight for class {0} in each training and validation dataset.", i);
         }
 
         private protected override SchemaShape.Column[] GetOutputColumnsCore(SchemaShape inputSchema)

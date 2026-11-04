@@ -126,6 +126,17 @@ namespace Microsoft.ML.Trainers.LightGbm
             };
 
             /// <summary>
+            /// Constraints in final Features vector slot order, or null/empty to disable.
+            /// A nonempty array must have one entry per slot. Active constraints require UseCategoricalSplit=false
+            /// and cannot target annotated categorical slots. Unannotated categories cannot be detected.
+            /// Constraints apply to Score with other slots fixed, not to inputs before preprocessing.
+            /// </summary>
+            [Argument(ArgumentType.Multiple, HelpText = "Monotone constraints in final feature slot order.")]
+            public MonotoneConstraint[] MonotoneConstraints;
+
+            internal override MonotoneConstraint[] GetMonotoneConstraints() => MonotoneConstraints;
+
+            /// <summary>
             /// Comma-separated list of gains associated with each relevance label.
             /// </summary>
             [Argument(ArgumentType.Multiple, HelpText = "An array of gains associated to each relevance label.", ShortName = "gains")]
@@ -164,6 +175,7 @@ namespace Microsoft.ML.Trainers.LightGbm
 
             internal override Dictionary<string, object> ToDictionary(IHost host)
             {
+                Contracts.CheckUserArg(Enum.IsDefined(typeof(EvaluateMetricType), EvaluationMetric), nameof(EvaluationMetric), "Unknown evaluation metric.");
                 var res = base.ToDictionary(host);
                 res[GetOptionName(nameof(Sigmoid))] = Sigmoid;
                 res[GetOptionName(nameof(CustomGains))] = string.Join(",", CustomGains);
