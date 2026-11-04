@@ -107,6 +107,23 @@ namespace Microsoft.ML.Trainers.LightGbm
             }
         }
 
+        public void ValidateLabels(Dictionary<string, object> parameters, float[] labels, string datasetName)
+        {
+            if (!HasValue("metric", "auc_mu"))
+                return;
+
+            // Native AUC-mu uses labels directly as indices into per-class buffers.
+            int classCount = (int)parameters["num_class"];
+            for (int i = 0; i < labels.Length; i++)
+            {
+                float label = labels[i];
+                if (!IsFinite(label) || label < 0 || label >= classCount || label != Math.Floor(label))
+                    throw Contracts.ExceptUserArg(nameof(labels),
+                        $"LightGBM metric 'auc_mu' requires finite integer labels in [0, {classCount}) after conversion. " +
+                        $"{datasetName} label at index {i} is {label.ToString(CultureInfo.InvariantCulture)}.");
+            }
+        }
+
         public void Apply(Dictionary<string, object> parameters, int featureCount, int[] categoricalBoundaries, bool[] isCategoricalFeature)
         {
             foreach (var pair in _values.OrderBy(pair => pair.Key, StringComparer.Ordinal))

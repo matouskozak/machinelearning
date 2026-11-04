@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -461,6 +462,36 @@ namespace Microsoft.ML.Tests.TrainerEstimators
                 Assert.Contains("5 values", exception.Message);
         }
 
+        [LightGBMTheory]
+        [InlineData(true, 3)]
+        [InlineData(false, 3)]
+        [InlineData(true, 1)]
+        public void CategoricalConstraintsRequireZerosOnlyForActiveCollapsedGroups(bool useCategoricalSplit, int categoryCount)
+        {
+            var context = new MLContext(seed: 1);
+            var data = CreateCategoricalData(context, categoryFirst: true, categoryCount: categoryCount);
+            var constraints = new int[categoryCount + 2];
+            constraints[0] = 1;
+            constraints[constraints.Length - 1] = -1;
+            var options = RegressionOptions(new Dictionary<string, object> { ["monotone_constraints"] = constraints });
+            options.UseCategoricalSplit = useCategoricalSplit;
+            var trainer = context.Regression.Trainers.LightGbm(options);
+
+            if (useCategoricalSplit && categoryCount > 1)
+            {
+                var exception = AssertInvalidOption(() => trainer.Fit(data), "monotone_constraints");
+                Assert.Contains("categorical Features slot 0", exception.Message);
+            }
+            else
+            {
+                var scores = trainer.Fit(data).Transform(data).GetColumn<float>("Score").ToArray();
+                Assert.Equal(string.Join(",", constraints), trainer.GetGbmParameters()["monotone_constraints"]);
+                Assert.True(!trainer.GetGbmParameters().TryGetValue("categorical_feature", out var categorical)
+                    || (string)categorical == "");
+                Assert.All(scores, score => Assert.True(!float.IsNaN(score) && !float.IsInfinity(score)));
+            }
+        }
+
         [LightGBMFact]
         public void RepeatedFitsResetCategoricalLayoutAndRemapFromInputSnapshot()
         {
@@ -502,8 +533,8 @@ namespace Microsoft.ML.Tests.TrainerEstimators
         public void AdditionalMetricsTrainWithValidationAndLogNativeNames(string task, string metric, string nativeName)
         {
             var context = new MLContext(seed: 1);
-            var messages = new List<string>();
-            context.Log += (sender, args) => messages.Add(args.Message);
+            var messages = new ConcurrentQueue<string>();
+            context.Log += (sender, args) => messages.Enqueue(args.Message);
             var training = context.Data.LoadFromEnumerable(GenerateRows(task));
             var validation = context.Data.LoadFromEnumerable(GenerateRows(task, offset: 200));
 
@@ -538,6 +569,83 @@ namespace Microsoft.ML.Tests.TrainerEstimators
                 Assert.Equal(200, scores.Length);
                 Assert.All(scores, score => Assert.True(!float.IsNaN(score) && !float.IsInfinity(score)));
             }
+        }
+
+        [Theory]
+        [InlineData(float.NaN)]
+        [InlineData(float.NegativeInfinity)]
+        [InlineData(float.PositiveInfinity)]
+        [InlineData(-1f)]
+        [InlineData(0.5f)]
+        [InlineData(3f)]
+        public void AucMuRejectsInvalidConvertedLabels(float label)
+        {
+            var options = new LightGbmAdditionalOptions(
+                new Dictionary<string, object> { ["metric"] = "auc_mu" }, PredictionKind.MulticlassClassification, "");
+            var parameters = new Dictionary<string, object> { ["num_class"] = 3 };
+            foreach (var dataset in new[] { "Training", "Validation" })
+            {
+                var exception = Assert.Throws<ArgumentOutOfRangeException>(
+                    () => options.ValidateLabels(parameters, new[] { 0f, label }, dataset));
+                Assert.Equal("labels", exception.ParamName);
+                Assert.Contains("auc_mu", exception.Message);
+                Assert.Contains("finite integer labels in [0, 3)", exception.Message);
+                Assert.Contains($"{dataset} label at index 1", exception.Message);
+            }
+        }
+
+        [LightGBMTheory]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        public void AucMuRejectsValidationKeyOutsideTrainingClassRange(bool useSoftmax, bool useWeights)
+        {
+            var context = new MLContext(seed: 1);
+            var training = CreateAucMuData(context, keyCount: 3, observedClassCount: 3);
+            var validation = CreateAucMuData(context, keyCount: 4, observedClassCount: 4);
+            Assert.Equal(3UL, ((KeyDataViewType)training.Schema["Label"].Type).Count);
+            Assert.Equal(4UL, ((KeyDataViewType)validation.Schema["Label"].Type).Count);
+            Assert.Equal(new[] { 1U, 2U, 3U }, training.GetColumn<uint>("Label").Distinct().ToArray());
+            Assert.Contains(4U, validation.GetColumn<uint>("Label"));
+            var trainer = CreateAucMuTrainer(context, useSoftmax, useWeights);
+
+            // Verbose and early stopping are disabled. The check must precede native AddValidData.
+            var exception = Assert.Throws<ArgumentOutOfRangeException>(() => trainer.Fit(training, validation));
+
+            Assert.Equal(3, trainer.GetGbmParameters()["num_class"]);
+            Assert.Equal("labels", exception.ParamName);
+            Assert.Contains("finite integer labels in [0, 3)", exception.Message);
+            Assert.Contains("Validation label at index 3 is 3", exception.Message);
+        }
+
+        [LightGBMTheory]
+        [InlineData(true, 3, 3, false)]
+        [InlineData(false, 3, 3, false)]
+        [InlineData(true, 2, 3, false)]
+        [InlineData(false, 2, 3, false)]
+        [InlineData(true, 3, 2, false)]
+        [InlineData(false, 3, 2, false)]
+        [InlineData(true, 3, 3, true)]
+        [InlineData(false, 3, 3, true)]
+        public void AucMuAcceptsInRangeLabelsWithoutRequiringEveryClass(bool useSoftmax,
+            int trainingClasses, int validationClasses, bool zeroClassWeight)
+        {
+            var context = new MLContext(seed: 1);
+            var training = CreateAucMuData(context, 3, trainingClasses, zeroClassWeight);
+            // A larger key cardinality is safe when all actual converted labels remain in range.
+            var validation = CreateAucMuData(context, 4, validationClasses, zeroClassWeight);
+            var trainer = CreateAucMuTrainer(context, useSoftmax, useWeights: true);
+
+            var scores = trainer.Fit(training, validation).Transform(validation).GetColumn<float[]>("Score").ToArray();
+
+            Assert.Equal(3, trainer.GetGbmParameters()["num_class"]);
+            Assert.Equal(120, scores.Length);
+            Assert.All(scores, score =>
+            {
+                Assert.Equal(3, score.Length);
+                Assert.All(score, value => Assert.True(!float.IsNaN(value) && !float.IsInfinity(value)));
+            });
         }
 
         [LightGBMTheory]
@@ -695,11 +803,11 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             }
         }
 
-        private static IDataView CreateCategoricalData(MLContext context, bool categoryFirst)
+        private static IDataView CreateCategoricalData(MLContext context, bool categoryFirst, int categoryCount = 3)
         {
             var rows = Enumerable.Range(0, 180).Select(i => new CategoricalRow
             {
-                Category = new[] { "red", "green", "blue" }[i % 3],
+                Category = new[] { "red", "green", "blue" }[i % categoryCount],
                 X = (i % 19) / 18f,
                 Y = (i * 7 % 23) / 22f,
                 Label = 3 * (i % 19) / 18f - 2 * (i * 7 % 23) / 22f + i % 3
@@ -711,6 +819,34 @@ namespace Microsoft.ML.Tests.TrainerEstimators
                 .Append(context.Transforms.Concatenate("Features", columns));
             return pipeline.Fit(data).Transform(data);
         }
+
+        private static IDataView CreateAucMuData(MLContext context, int keyCount, int observedClassCount, bool zeroClassWeight = false)
+        {
+            var schema = SchemaDefinition.Create(typeof(MulticlassKeyRow));
+            schema[nameof(MulticlassKeyRow.Label)].ColumnType = new KeyDataViewType(typeof(uint), (ulong)keyCount);
+            return context.Data.LoadFromEnumerable(Enumerable.Range(0, 120).Select(i => new MulticlassKeyRow
+            {
+                Features = new[] { (float)(i % 11), (float)(i * 7 % 19) },
+                // LoadFromEnumerable adds one when exposing CLR values as keys.
+                Label = (uint)(i % observedClassCount),
+                Weight = zeroClassWeight && i % observedClassCount == observedClassCount - 1 ? 0 : 1
+            }), schema);
+        }
+
+        private static LightGbmMulticlassTrainer CreateAucMuTrainer(MLContext context, bool useSoftmax, bool useWeights)
+            => context.MulticlassClassification.Trainers.LightGbm(new LightGbmMulticlassTrainer.Options
+            {
+                EvaluationMetric = LightGbmMulticlassTrainer.Options.EvaluateMetricType.Default,
+                AdditionalOptions = new Dictionary<string, object> { ["metric"] = "auc_mu" },
+                ExampleWeightColumnName = useWeights ? "Weight" : null,
+                UseSoftmax = useSoftmax,
+                NumberOfIterations = 3,
+                NumberOfThreads = 1,
+                MinimumExampleCountPerLeaf = 5,
+                NumberOfLeaves = 4,
+                Verbose = false,
+                EarlyStoppingRound = 0
+            });
 
         private static NumericRow[] GenerateRows(string task, int offset = 0)
         {
@@ -931,6 +1067,14 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             [VectorType(5)]
             public float[] Features { get; set; }
             public float Label { get; set; }
+        }
+
+        private sealed class MulticlassKeyRow
+        {
+            [VectorType(2)]
+            public float[] Features { get; set; }
+            public uint Label { get; set; }
+            public float Weight { get; set; }
         }
 
         private sealed class CategoricalRow

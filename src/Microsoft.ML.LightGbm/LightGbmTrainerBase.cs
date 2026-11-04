@@ -268,7 +268,7 @@ namespace Microsoft.ML.Trainers.LightGbm
             /// for quantile), <c>monotone_constraints</c> (int[] in Features slot order, values -1/0/1),
             /// <c>extra_trees</c> (bool), <c>extra_seed</c> (int, requiring extra_trees),
             /// <c>feature_fraction_bynode</c> (double in (0,1]), and <c>histogram_pool_size</c> (double MiB, positive or -1).
-            /// Constraints require zeros for categorical slots and are not supported for the quantile objective or multiclass.
+            /// Constraints are not supported for the quantile objective or multiclass.
             /// Existing typed options, aliases, multiple metrics, and unlisted native settings are rejected.
             /// Null or an empty dictionary preserves the existing defaults. This does not change Evaluate() metrics
             /// or provide entry-point, AutoML, or context-wide configuration.
@@ -282,8 +282,11 @@ namespace Microsoft.ML.Trainers.LightGbm
             /// A supplied alpha is rejected unless the objective or metric is quantile.
             /// </para>
             /// <para>
-            /// Constraints refer to the transformed Features vector, not original columns. One-hot categorical
-            /// groups must contain zeros. Numeric constraints are remapped after those groups are collapsed.
+            /// Constraints refer to the transformed Features vector, not original columns. Slots collapsed into
+            /// an active native categorical feature must have zero constraints. With UseCategoricalSplit disabled,
+            /// or for a one-slot group that is not collapsed, slots are numerical and may be constrained.
+            /// Numeric constraints are remapped past collapsed groups. Automatic categorical selection can make
+            /// acceptance of the same schema depend on dataset size. Set UseCategoricalSplit explicitly to avoid this.
             /// Saved models retain effective native parameters as diagnostic text, not a reusable options object.
             /// Options are not read from MLContext, and concurrent Fit calls on one trainer are not supported.
             /// </para>
@@ -720,6 +723,7 @@ namespace Microsoft.ML.Trainers.LightGbm
 
             CheckAndUpdateParametersBeforeTraining(ch, trainData, labels, groups);
             _additionalOptions.Apply(GbmOptions, FeatureCount, catMetaData.CategoricalBoudaries, catMetaData.IsCategoricalFeature);
+            _additionalOptions.ValidateLabels(GbmOptions, labels, "Training");
             string param = LightGbmInterfaceUtils.JoinParameters(GbmOptions);
 
             Dataset dtrain;
@@ -748,6 +752,7 @@ namespace Microsoft.ML.Trainers.LightGbm
             // Load meta info first.
             var factory = CreateCursorFactory(validData);
             GetMetainfo(ch, factory, out int numRow, out float[] labels, out float[] weights, out int[] groups);
+            _additionalOptions.ValidateLabels(GbmOptions, labels, "Validation");
 
             // Construct validation dataset.
             Dataset dvalid = new Dataset(dtrain, numRow, labels, weights);
