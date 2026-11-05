@@ -197,11 +197,11 @@ namespace Microsoft.ML.Trainers.LightGbm
             public bool? UseCategoricalSplit;
 
             /// <summary>
-            /// Optional constraints indexed by the original Features vector slots. The length must match
+            /// Optional constraints indexed by the original Features vector slots. A nonempty array must match
             /// the vector size. Categorical slots must be None, even when categorical splitting is disabled.
             /// Numeric slots are mapped through any native categorical collapsing. Nonzero constraints
             /// are supported only for squared-error regression, binary classification, and ranking.
-            /// Quantile and multiclass training reject them. Null or an all-None vector imposes no constraints.
+            /// Quantile and multiclass training reject them. Null, empty, or an all-None vector imposes no constraints.
             /// </summary>
             [Argument(ArgumentType.Multiple, HelpText = "Monotonic directions for numeric feature slots.")]
             public MonotoneConstraint[] MonotoneConstraints;
@@ -457,6 +457,7 @@ namespace Microsoft.ML.Trainers.LightGbm
                         {
                             // Training-only typed options do not need reconstruction to score an imported model.
                             if (field.Name == nameof(LightGbmRegressionTrainer.Options.Objective) ||
+                                field.Name == nameof(LightGbmRegressionTrainer.Options.Alpha) ||
                                 field.Name == nameof(OptionsBase.MonotoneConstraints))
                                 continue;
                             var lightGbmName = LightGbmTrainerOptions.GetOptionName(field.Name);
@@ -719,6 +720,7 @@ namespace Microsoft.ML.Trainers.LightGbm
             GetDefaultParameters(ch, numRow, catMetaData.CategoricalBoudaries != null, catMetaData.TotalCats);
 
             CheckAndUpdateParametersBeforeTraining(ch, trainData, labels, groups);
+            CheckMetricLabels(ch, labels);
             GbmOptions["metric"] = LightGbmMetrics.Resolve(_requestedMetrics, (string)GbmOptions["objective"]);
             SetMonotoneConstraints(ch, trainData, catMetaData);
             string param = LightGbmInterfaceUtils.JoinParameters(GbmOptions);
@@ -739,7 +741,7 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         private void SetMonotoneConstraints(IChannel ch, RoleMappedData data, CategoricalMetaData metadata)
         {
-            if (_monotoneConstraints == null)
+            if (_monotoneConstraints == null || _monotoneConstraints.Length == 0)
                 return;
             ch.CheckUserArg(_monotoneConstraints.Length == FeatureCount, nameof(OptionsBase.MonotoneConstraints),
                 "The constraint count must equal the original Features vector size.");
@@ -761,7 +763,17 @@ namespace Microsoft.ML.Trainers.LightGbm
             var nativeConstraints = new int[metadata.NumCol];
             for (int i = 0; i < nativeConstraints.Length; i++)
                 nativeConstraints[i] = (int)_monotoneConstraints[metadata.CategoricalBoudaries == null ? i : metadata.CategoricalBoudaries[i]];
-            GbmOptions["monotone_constraints"] = string.Join(",", nativeConstraints);
+            GbmOptions["monotone_constraints"] = string.Join(",", nativeConstraints.Select(value => value.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        private void CheckMetricLabels(IChannel ch, float[] labels)
+        {
+            if (!_requestedMetrics.Contains("auc_mu"))
+                return;
+            int numClasses = (int)GbmOptions["num_class"];
+            // AUC-mu indexes native class arrays directly, including during metric initialization.
+            ch.CheckParam(labels.All(label => label >= 0 && label < numClasses && label == Math.Truncate(label)),
+                nameof(labels), "AUC-mu requires finite integer labels in the training class range [0, num_class) after conversion.");
         }
 
         private Dataset LoadValidationData(IChannel ch, Dataset dtrain, RoleMappedData validData, CategoricalMetaData catMetaData)
@@ -776,6 +788,7 @@ namespace Microsoft.ML.Trainers.LightGbm
             // Load meta info first.
             var factory = CreateCursorFactory(validData);
             GetMetainfo(ch, factory, out int numRow, out float[] labels, out float[] weights, out int[] groups);
+            CheckMetricLabels(ch, labels);
 
             // Construct validation dataset.
             Dataset dvalid = new Dataset(dtrain, numRow, labels, weights);

@@ -10,10 +10,12 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.ML.CommandLine;
 using Microsoft.ML.Data;
 using Microsoft.ML.Runtime;
 using Microsoft.ML.TestFramework;
 using Microsoft.ML.TestFramework.Attributes;
+using Microsoft.ML.Trainers;
 using Microsoft.ML.Trainers.LightGbm;
 using Xunit;
 using Xunit.Abstractions;
@@ -174,18 +176,30 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             Assert.Equal(Scores(first, data), Scores(second, data));
         }
 
-        [Fact]
-        public void QuantileTextModelImportDoesNotConvertTrainingOptionEnums()
+        [Theory]
+        [InlineData("en-US")]
+        [InlineData("fr-FR")]
+        public void QuantileTextModelImportDoesNotConvertTrainingOnlyOptions(string culture)
         {
-            var ml = CreateContext(out _);
-            const string modelText = "max_feature_idx=1\nobjective=quantile\n\n" +
-                "Tree=0\nnum_leaves=1\nnum_cat=0\nleaf_value=2.5\n\n" +
-                "parameters:\n[objective: quantile]\n[alpha: 0.9]\n" +
-                "[monotone_constraints: ]\n[categorical_feature: ]\nend of parameters\n";
-            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(modelText));
-            var data = ml.Data.LoadFromEnumerable(RegressionRows());
-            var model = ml.Regression.Trainers.LightGbm(stream).Fit(data);
-            Assert.All(Scores(model, data), score => Assert.Equal(2.5f, score));
+            var originalCulture = CultureInfo.CurrentCulture;
+            try
+            {
+                CultureInfo.CurrentCulture = new CultureInfo(culture);
+                var ml = CreateContext(out _);
+                const string modelText = "max_feature_idx=1\nobjective=quantile\n\n" +
+                    "Tree=0\nnum_leaves=1\nnum_cat=0\nleaf_value=2.5\n\n" +
+                    "parameters:\n[objective: quantile]\n[alpha: 0.9]\n" +
+                    "[learning_rate: 1]\n[cat_smooth: 10]\n[cat_l2: 10]\n" +
+                    "[monotone_constraints: ]\n[categorical_feature: ]\nend of parameters\n";
+                using var stream = new MemoryStream(Encoding.UTF8.GetBytes(modelText));
+                var data = ml.Data.LoadFromEnumerable(RegressionRows());
+                var model = ml.Regression.Trainers.LightGbm(stream).Fit(data);
+                Assert.All(Scores(model, data), score => Assert.Equal(2.5f, score));
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = originalCulture;
+            }
         }
 
         [LightGBMTheory]
@@ -261,6 +275,117 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             var scores = model.Transform(data).GetColumn<float[]>("Score").ToArray();
             Assert.Equal(72, scores.Length);
             Assert.All(scores, score => { Assert.Equal(3, score.Length); Assert.All(score, AssertFinite); });
+        }
+
+        [LightGBMTheory]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public void AucMuRejectsValidationKeysOutsideTrainingClassRange(bool primary, bool weighted)
+        {
+            var ml = CreateContext(out _);
+            var train = ml.Data.LoadFromEnumerable(Enumerable.Range(0, 60).Select(i => new MulticlassRow
+            {
+                Label = (uint)(i % 3),
+                Features = new[] { (float)(i % 3), (float)(i % 5) },
+                Weight = 1 + i % 2
+            }));
+            var schema = SchemaDefinition.Create(typeof(MulticlassRow));
+            schema[nameof(MulticlassRow.Label)].ColumnType = new KeyDataViewType(typeof(uint), 4);
+            var validation = ml.Data.LoadFromEnumerable(Enumerable.Range(0, 60).Select(i => new MulticlassRow
+            {
+                Label = (uint)(i % 4),
+                Features = new[] { (float)(i % 4), (float)(i % 5) },
+                Weight = 1 + i % 2
+            }), schema);
+            Assert.Equal(3UL, ((KeyDataViewType)train.Schema["Label"].Type).Count);
+            Assert.Equal(4UL, ((KeyDataViewType)validation.Schema["Label"].Type).Count);
+            Assert.Contains(4u, validation.GetColumn<uint>("Label"));
+            var trainer = ml.MulticlassClassification.Trainers.LightGbm(new LightGbmMulticlassTrainer.Options
+            {
+                NumberOfIterations = 1,
+                MinimumExampleCountPerLeaf = 2,
+                ExampleWeightColumnName = weighted ? nameof(MulticlassRow.Weight) : null,
+                EvaluationMetric = primary ? MulticlassMetric.AreaUnderCurveMu : MulticlassMetric.LogLoss,
+                AdditionalEvaluationMetrics = primary ? null : new[] { MulticlassMetric.AreaUnderCurveMu },
+                Verbose = false,
+                EarlyStoppingRound = 0
+            });
+
+            var error = Assert.Throws<ArgumentOutOfRangeException>(() => trainer.Fit(train, validation));
+
+            Assert.Equal("labels", error.ParamName);
+            Assert.Contains("AUC-mu", error.Message);
+            Assert.Contains("training class range", error.Message);
+        }
+
+        [LightGBMTheory]
+        [InlineData(true, 0.5f)]
+        [InlineData(false, 0.5f)]
+        [InlineData(false, -1f)]
+        [InlineData(false, 3f)]
+        [InlineData(false, float.PositiveInfinity)]
+        [InlineData(false, float.NegativeInfinity)]
+        public void AucMuRejectsInvalidConvertedLabelsOnBothDatasets(bool invalidTraining, float invalidLabel)
+        {
+            var ml = CreateContext(out _);
+            var rows = Enumerable.Range(0, 60).Select(i => new RegressionRow
+            {
+                Label = i % 3,
+                Features = new[] { (float)(i % 3), (float)(i % 5) }
+            }).ToArray();
+            var invalidRows = rows.Select(row => new RegressionRow { Label = row.Label, Features = row.Features }).ToArray();
+            invalidRows[0].Label = invalidLabel;
+            var valid = new RoleMappedData(ml.Data.LoadFromEnumerable(rows), label: "Label", feature: "Features");
+            var invalid = new RoleMappedData(ml.Data.LoadFromEnumerable(invalidRows), label: "Label", feature: "Features");
+            var trainer = ml.MulticlassClassification.Trainers.LightGbm(new LightGbmMulticlassTrainer.Options
+            {
+                NumberOfIterations = 1,
+                EvaluationMetric = MulticlassMetric.LogLoss,
+                AdditionalEvaluationMetrics = new[] { MulticlassMetric.AreaUnderCurveMu }
+            });
+
+            var error = Assert.Throws<ArgumentOutOfRangeException>(() => ((ITrainer)trainer).Train(
+                new TrainContext(invalidTraining ? invalid : valid, invalidTraining ? valid : invalid)));
+
+            Assert.Equal("labels", error.ParamName);
+            Assert.Contains("finite integer labels", error.Message);
+        }
+
+        [LightGBMTheory]
+        [InlineData(false, false)]
+        [InlineData(false, true)]
+        [InlineData(true, false)]
+        [InlineData(true, true)]
+        public void AucMuAllowsMissingClassesWithoutEarlyStopping(bool missingTrainingClass, bool missingValidationClass)
+        {
+            var ml = CreateContext(out _);
+            var rows = Enumerable.Range(0, 60).Select(i => new MulticlassRow
+            {
+                Label = (uint)(i % 3),
+                Features = new[] { (float)(i % 3), (float)(i % 5) }
+            }).ToArray();
+            var train = ml.Data.LoadFromEnumerable(rows.Where(row => !missingTrainingClass || row.Label != 2));
+            var validation = ml.Data.LoadFromEnumerable(rows.Where(row => !missingValidationClass || row.Label != 2));
+            var trainer = ml.MulticlassClassification.Trainers.LightGbm(new LightGbmMulticlassTrainer.Options
+            {
+                NumberOfIterations = 2,
+                MinimumExampleCountPerLeaf = 2,
+                EvaluationMetric = MulticlassMetric.AreaUnderCurveMu,
+                AdditionalEvaluationMetrics = new[] { MulticlassMetric.LogLoss },
+                Verbose = false,
+                EarlyStoppingRound = 0
+            });
+
+            var model = trainer.Fit(train, validation);
+
+            Assert.Equal(3, trainer.GetGbmParameters()["num_class"]);
+            Assert.All(model.Transform(validation).GetColumn<float[]>("Score"), scores =>
+            {
+                Assert.Equal(3, scores.Length);
+                Assert.All(scores, AssertFinite);
+            });
         }
 
         [LightGBMTheory]
@@ -500,6 +625,59 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             }
         }
 
+        [LightGBMFact]
+        public void DecreasingConstraintsUseAsciiMinusUnderNonAsciiNegativeSignCulture()
+        {
+            var originalCulture = CultureInfo.CurrentCulture;
+            try
+            {
+                var culture = new CultureInfo("sv-SE");
+                culture.NumberFormat.NegativeSign = "\u2212";
+                CultureInfo.CurrentCulture = culture;
+                Assert.Equal("\u22121", (-1).ToString());
+                var ml = CreateContext(out _);
+                var rows = RegressionRows();
+                foreach (var row in rows)
+                    row.Label = -2 * row.Features[0] + row.Features[1];
+                var data = ml.Data.LoadFromEnumerable(rows);
+                var options = RegressionOptions(16);
+                options.MonotoneConstraints = new[] { MonotoneConstraint.Decreasing, MonotoneConstraint.None };
+                var trainer = ml.Regression.Trainers.LightGbm(options);
+
+                var model = trainer.Fit(data);
+
+                Assert.Equal("-1,0", trainer.GetGbmParameters()["monotone_constraints"]);
+                var probes = ml.Data.LoadFromEnumerable(Enumerable.Range(0, 16).Select(i =>
+                    new RegressionRow { Features = new[] { (float)i, 0f } }));
+                var scores = Scores(model, probes);
+                for (int i = 1; i < scores.Length; i++)
+                    Assert.True(scores[i] <= scores[i - 1]);
+                Assert.True(scores[0] - scores.Last() > 0.1);
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = originalCulture;
+            }
+        }
+
+        [LightGBMFact]
+        public void ParsedOmittedConstraintCollectionsAreDisabled()
+        {
+            var ml = CreateContext(out _);
+            var options = new LightGbmRegressionTrainer.Options();
+            Assert.True(CmdParser.ParseArguments(ml, "iter=1", options));
+            Assert.Empty(options.MonotoneConstraints);
+            Assert.Empty(options.AdditionalEvaluationMetrics);
+            var trainer = ml.Regression.Trainers.LightGbm(options);
+            var data = ml.Data.LoadFromEnumerable(RegressionRows());
+
+            var model = trainer.Fit(data);
+
+            Assert.Equal(1, options.NumberOfIterations);
+            Assert.False(trainer.GetGbmParameters().ContainsKey("monotone_constraints"));
+            Assert.Equal(96, Scores(model, data).Length);
+        }
+
         [LightGBMTheory]
         [InlineData(false, false)]
         [InlineData(true, false)]
@@ -694,7 +872,6 @@ namespace Microsoft.ML.Tests.TrainerEstimators
         }
 
         [LightGBMTheory]
-        [InlineData(0, false)]
         [InlineData(1, false)]
         [InlineData(3, false)]
         [InlineData(2, true)]
@@ -838,6 +1015,7 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             public float[] Features { get; set; }
             [KeyType(3)]
             public uint Label { get; set; }
+            public float Weight { get; set; } = 1;
         }
 
         private sealed class RankingRow

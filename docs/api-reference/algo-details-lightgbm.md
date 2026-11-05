@@ -24,6 +24,9 @@ Completing the iteration budget still returns all trees. DART early stopping
 is disabled with a warning because truncation cannot restore earlier tree weights.
 The prototype also rejects stopping with no metric or a nonfinite primary score.
 Undefined diagnostic metrics are reported with a warning and do not select the model.
+AUC-mu validates converted training and validation labels before native metric
+initialization. Labels must be finite integers within the training class range.
+Missing classes are allowed, but can make the metric undefined.
 
 Regression adds `Objective = RegressionObjective.Quantile` and `Alpha` (default
 0.5, strictly between zero and one at native float precision). Quantile training
@@ -38,7 +41,7 @@ must be `None`, including when categorical splitting is disabled. Numeric
 constraints are remapped if categorical slots collapse during training.
 Nonzero constraints are supported only for squared-error regression, binary
 classification, and ranking. Although the option is inherited by multiclass
-trainers, multiclass and quantile training reject active constraints. Null or an
+trainers, multiclass and quantile training reject active constraints. Null, empty, or an
 all-`None` vector is allowed. Constraints apply to post-transform feature values,
 not necessarily the original input columns.
 
