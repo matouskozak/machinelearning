@@ -265,9 +265,7 @@ namespace Microsoft.ML.Trainers.LightGbm
             /// This fork-only prototype accepts canonical, case-sensitive names, not arbitrary native options.
             /// Supported keys are <c>metric</c> (one task-compatible string, requiring EvaluationMetric = Default),
             /// <c>objective</c> (regression only: "regression" or "quantile"), <c>alpha</c> (double, required explicitly
-            /// for quantile), <c>monotone_constraints</c> (int[] in Features slot order, values -1/0/1),
-            /// <c>extra_trees</c> (bool), <c>extra_seed</c> (int, requiring extra_trees),
-            /// <c>feature_fraction_bynode</c> (double in (0,1]), and <c>histogram_pool_size</c> (double MiB, positive or -1).
+            /// for quantile), and <c>monotone_constraints</c> (int[] in Features slot order, values -1/0/1).
             /// Constraints are not supported for the quantile objective or multiclass.
             /// Existing typed options, aliases, multiple metrics, and unlisted native settings are rejected.
             /// Null or an empty dictionary preserves the existing defaults. This does not change Evaluate() metrics

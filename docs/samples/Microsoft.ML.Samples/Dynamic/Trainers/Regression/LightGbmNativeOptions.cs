@@ -36,9 +36,7 @@ namespace Samples.Dynamic.Trainers.Regression
                 {
                     ["objective"] = "quantile",
                     ["alpha"] = 0.9,
-                    ["metric"] = "quantile",
-                    ["feature_fraction_bynode"] = 0.8,
-                    ["histogram_pool_size"] = 64.0
+                    ["metric"] = "quantile"
                 }
             });
             // Verbose native training/validation metrics appear in Log every 50 iterations.
@@ -53,9 +51,7 @@ namespace Samples.Dynamic.Trainers.Regression
                 MinimumExampleCountPerLeaf = 5,
                 AdditionalOptions = new Dictionary<string, object>
                 {
-                    ["monotone_constraints"] = new[] { 1 },
-                    ["extra_trees"] = true,
-                    ["extra_seed"] = 7
+                    ["monotone_constraints"] = new[] { 1 }
                 }
             });
             var monotoneModel = monotone.Fit(data);

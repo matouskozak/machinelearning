@@ -53,21 +53,25 @@ namespace Microsoft.ML.Tests.TrainerEstimators
         [InlineData("gpu_device_id")]
         [InlineData("eval_at")]
         [InlineData("verbosity")]
-        [InlineData("extra_trees ")]
+        [InlineData("extra_trees")]
+        [InlineData("extra_seed")]
+        [InlineData("feature_fraction_bynode")]
+        [InlineData("histogram_pool_size")]
+        [InlineData("metric ")]
         [InlineData("metric=l2 num_threads=8")]
         public void ConstructorRejectsUnsupportedKeys(string key)
         {
             var context = new MLContext(seed: 1);
-            AssertInvalidOption(() => CreateTrainer(context, "regression",
+            var exception = AssertInvalidOption(() => CreateTrainer(context, "regression",
                 new Dictionary<string, object> { [key] = 1 }), key);
+            Assert.Contains("Unsupported AdditionalOptions key", exception.Message);
         }
 
         public static IEnumerable<object[]> InvalidOptionValues()
         {
             foreach (var key in new[]
             {
-                "metric", "objective", "alpha", "monotone_constraints",
-                "extra_trees", "extra_seed", "feature_fraction_bynode", "histogram_pool_size"
+                "metric", "objective", "alpha", "monotone_constraints"
             })
                 yield return new object[] { key, null };
 
@@ -94,14 +98,6 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             foreach (var value in new object[] { Array.Empty<int>(), new[] { 2 }, new[] { -2 }, new[] { 1.0 }, "1,-1" })
                 yield return new object[] { "monotone_constraints", value };
 
-            foreach (var value in new object[] { 1, "true", 1.0 })
-                yield return new object[] { "extra_trees", value };
-            foreach (var value in new object[] { 17L, 17.0, "17", true })
-                yield return new object[] { "extra_seed", value };
-            foreach (var value in new object[] { 1, 0.5f, "0.5", 0.0, -0.1, 1.01, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
-                yield return new object[] { "feature_fraction_bynode", value };
-            foreach (var value in new object[] { -1, 1.0f, "-1", 0.0, -0.5, -2.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
-                yield return new object[] { "histogram_pool_size", value };
         }
 
         [Theory]
@@ -112,8 +108,6 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             var additional = new Dictionary<string, object> { [key] = value };
             if (key == "alpha")
                 additional["objective"] = "quantile";
-            if (key == "extra_seed")
-                additional["extra_trees"] = true;
 
             AssertInvalidOption(() => CreateTrainer(context, "regression", additional), key);
         }
@@ -209,19 +203,6 @@ namespace Microsoft.ML.Tests.TrainerEstimators
         }
 
         [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public void ConstructorRejectsExtraSeedWithoutEnabledExtraTrees(bool includeDisabledExtraTrees)
-        {
-            var context = new MLContext(seed: 1);
-            var additional = new Dictionary<string, object> { ["extra_seed"] = 17 };
-            if (includeDisabledExtraTrees)
-                additional["extra_trees"] = false;
-
-            AssertInvalidOption(() => CreateTrainer(context, "regression", additional), "extra_seed");
-        }
-
-        [Theory]
         [InlineData("regression", "l1")]
         [InlineData("regression", "l2")]
         [InlineData("regression", "rmse")]
@@ -303,29 +284,22 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             Assert.False(first.GetGbmParameters().ContainsKey("unsupported_after_construction"));
         }
 
-        [LightGBMTheory]
-        [InlineData(true, 0.75, 16.0)]
-        [InlineData(false, 1.0, -1.0)]
-        public void NativeOnlyOptionsSurviveFinalParametersAndTrain(bool extraTrees, double fraction, double histogramPoolSize)
+        [LightGBMFact]
+        public void ExplicitRegressionObjectiveMatchesDefaultPredictions()
         {
             var context = new MLContext(seed: 1);
             var data = context.Data.LoadFromEnumerable(GenerateRows("regression"));
             var additional = new Dictionary<string, object>
             {
-                ["objective"] = "regression",
-                ["extra_trees"] = extraTrees,
-                ["feature_fraction_bynode"] = fraction,
-                ["histogram_pool_size"] = histogramPoolSize
+                ["objective"] = "regression"
             };
-            if (extraTrees)
-                additional["extra_seed"] = 23;
             var trainer = context.Regression.Trainers.LightGbm(RegressionOptions(additional));
+            var baseline = context.Regression.Trainers.LightGbm(RegressionOptions());
 
             var scores = trainer.Fit(data).Transform(data).GetColumn<float>("Score").ToArray();
 
-            foreach (var pair in additional)
-                Assert.Equal(pair.Value, trainer.GetGbmParameters()[pair.Key]);
-            Assert.All(scores, score => Assert.True(!float.IsNaN(score) && !float.IsInfinity(score)));
+            Assert.Equal("regression", trainer.GetGbmParameters()["objective"]);
+            Assert.Equal(baseline.Fit(data).Transform(data).GetColumn<float>("Score").ToArray(), scores);
             Assert.True(scores.Max() - scores.Min() > 0.1f);
         }
 

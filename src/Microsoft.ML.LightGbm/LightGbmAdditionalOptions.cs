@@ -48,20 +48,6 @@ namespace Microsoft.ML.Trainers.LightGbm
                             "must be a nonempty int[] containing only -1, 0 and 1 in Features slot order.");
                         value = ((int[])value).Clone();
                         break;
-                    case "extra_trees":
-                        Check(value is bool, key, "must be a bool.");
-                        break;
-                    case "extra_seed":
-                        Check(value is int, key, "must be an int.");
-                        break;
-                    case "feature_fraction_bynode":
-                        Check(value is double fraction && IsFinite(fraction) && fraction > 0 && fraction <= 1, key,
-                            "must be a finite double in (0, 1].");
-                        break;
-                    case "histogram_pool_size":
-                        Check(value is double size && IsFinite(size) && (size == -1 || size > 0), key,
-                            "must be a positive finite double in MiB, or -1.0 for no limit.");
-                        break;
                     default:
                         throw Contracts.ExceptUserArg(nameof(LightGbmRegressionTrainer.Options.AdditionalOptions),
                             $"Unsupported AdditionalOptions key '{key}'. Use canonical allowlisted names. Existing typed options, aliases and unreviewed native settings cannot be overridden.");
@@ -75,11 +61,9 @@ namespace Microsoft.ML.Trainers.LightGbm
                 "must be supplied explicitly when the objective or metric is quantile, and is not supported otherwise.");
             Check(!quantileObjective || !_values.ContainsKey("monotone_constraints"), "monotone_constraints",
                 "cannot be combined with the quantile objective, including an all-zero vector.");
-            Check(!_values.ContainsKey("extra_seed") || HasValue("extra_trees", true), "extra_seed",
-                "requires extra_trees = true.");
         }
 
-        private bool HasValue(string key, object expected)
+        private bool HasValue(string key, string expected)
             => _values.TryGetValue(key, out var value) && value.Equals(expected);
 
         private static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
