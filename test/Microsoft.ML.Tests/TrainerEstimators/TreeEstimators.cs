@@ -362,15 +362,16 @@ namespace Microsoft.ML.Tests.TrainerEstimators
 
         [LightGBMTheory]
         [InlineData(false, null, 26.25f)]
-        [InlineData(false, 0.9, 26.25f)]
-        [InlineData(true, null, 10.25f)]
+        [InlineData(false, 0.5, 26.25f)]
+        [InlineData(true, null, 100.25f)]
         [InlineData(true, 0.1, 0.25f)]
+        [InlineData(true, 0.5, 10.25f)]
         [InlineData(true, 0.9, 100.25f)]
         public void LightGbmRegressionQuantileDefaultsAndPredictions(bool quantile, double? alpha, float expectedScore)
         {
             var options = CreateLightGbmQuantileOptions();
             Assert.Equal(LightGbmRegressionTrainer.Options.RegressionObjective.Regression, options.Objective);
-            Assert.Equal(0.5, options.Alpha);
+            Assert.Equal(0.9, options.Alpha);
             Assert.Equal(LightGbmRegressionTrainer.Options.EvaluateMetricType.RootMeanSquaredError, options.EvaluationMetric);
             if (quantile)
             {

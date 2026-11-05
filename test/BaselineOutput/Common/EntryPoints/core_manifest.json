@@ -13267,7 +13267,7 @@
           "Required": false,
           "SortOrder": 150.0,
           "IsNullable": false,
-          "Default": 0.5,
+          "Default": 0.9,
           "Range": {
             "Sup": 1.0,
             "Inf": 0.0

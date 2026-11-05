@@ -98,7 +98,7 @@ namespace Microsoft.ML.Trainers.LightGbm
     /// [!include[algorithm](~/../docs/samples/docs/api-reference/algo-details-lightgbm.md)]
     ///
     /// Set `Options.Objective` to `Options.RegressionObjective.Quantile`
-    /// to estimate the conditional quantile specified by `Options.Alpha` (0.5 by default).
+    /// to estimate the conditional quantile specified by `Options.Alpha` (0.9 by default).
     /// The evaluation metric still defaults to RMSE. Set `Options.EvaluationMetric` to
     /// `Options.EvaluateMetricType.Default` to monitor the objective's native metric (quantile loss).
     /// Independently trained quantiles do not guarantee non-crossing predictions or calibrated interval coverage.
@@ -162,11 +162,12 @@ namespace Microsoft.ML.Trainers.LightGbm
 
             /// <summary>
             /// The target quantile, used only when <see cref="Objective"/> is <see cref="RegressionObjective.Quantile"/>.
-            /// Defaults to 0.5 (the median). Must remain strictly between 0 and 1 after conversion to single precision.
+            /// Defaults to 0.9 (the 90th percentile), matching LightGBM. Set to 0.5 for the median.
+            /// Must remain strictly between 0 and 1 after conversion to single precision.
             /// </summary>
             [Argument(ArgumentType.AtMostOnce, HelpText = "Target quantile. Must be in (0,1) after conversion to single precision.")]
             [TlcModule.Range(Inf = 0.0, Sup = 1.0)]
-            public double Alpha = 0.5;
+            public double Alpha = 0.9;
 
             /// <summary>
             /// Determines what evaluation metric to use.
