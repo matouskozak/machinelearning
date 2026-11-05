@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -357,6 +358,245 @@ namespace Microsoft.ML.Tests.TrainerEstimators
             TestEstimatorCore(trainer, dataView);
             var model = trainer.Fit(dataView, dataView);
             Done();
+        }
+
+        [LightGBMTheory]
+        [InlineData(false, null, 26.25f)]
+        [InlineData(false, 0.9, 26.25f)]
+        [InlineData(true, null, 10.25f)]
+        [InlineData(true, 0.1, 0.25f)]
+        [InlineData(true, 0.9, 100.25f)]
+        public void LightGbmRegressionQuantileDefaultsAndPredictions(bool quantile, double? alpha, float expectedScore)
+        {
+            var options = CreateLightGbmQuantileOptions();
+            Assert.Equal(LightGbmRegressionTrainer.Options.RegressionObjective.Regression, options.Objective);
+            Assert.Equal(0.5, options.Alpha);
+            Assert.Equal(LightGbmRegressionTrainer.Options.EvaluateMetricType.RootMeanSquaredError, options.EvaluationMetric);
+            if (quantile)
+            {
+                options.Objective = LightGbmRegressionTrainer.Options.RegressionObjective.Quantile;
+                options.EvaluationMetric = LightGbmRegressionTrainer.Options.EvaluateMetricType.Default;
+            }
+            if (alpha.HasValue)
+                options.Alpha = alpha.Value;
+
+            var rows = GetLightGbmQuantileRows();
+            var data = ML.Data.LoadFromEnumerable(rows);
+            var trainer = ML.Regression.Trainers.LightGbm(options);
+            var model = trainer.Fit(data, data);
+            var parameters = trainer.GetGbmParameters();
+            Assert.Equal(quantile ? "quantile" : "regression", parameters["objective"]);
+            Assert.Equal(quantile ? "" : "rmse", parameters["metric"]);
+            if (quantile)
+                Assert.Equal(options.Alpha, Assert.IsType<double>(parameters["alpha"]));
+            else
+                Assert.False(parameters.ContainsKey("alpha"));
+
+            var scores = model.Transform(data).GetColumn<float>("Score").ToArray();
+            Assert.Equal(rows.Length, scores.Length);
+            for (int i = 0; i < scores.Length; i++)
+                Assert.InRange(Math.Abs(scores[i] - (expectedScore + 200 * (rows[i].Features[0] - 1))), 0, 0.001f);
+
+            using var stream = new MemoryStream();
+            ML.Model.Save(model, data.Schema, stream);
+            stream.Position = 0;
+            var loadedModel = ML.Model.Load(stream, out _);
+            Assert.Equal(scores, loadedModel.Transform(data).GetColumn<float>("Score").ToArray());
+            Done();
+        }
+
+        [LightGBMTheory]
+        [InlineData(false, 0.1, 26.25f)]
+        [InlineData(true, 0.1, 0.25f)]
+        [InlineData(true, 0.9, 100.25f)]
+        public void LightGbmRegressionQuantileCapturesOptions(bool quantile, double alpha, float expectedScore)
+        {
+            var options = CreateLightGbmQuantileOptions();
+            options.Objective = quantile ? LightGbmRegressionTrainer.Options.RegressionObjective.Quantile
+                : LightGbmRegressionTrainer.Options.RegressionObjective.Regression;
+            options.Alpha = alpha;
+            var trainer = ML.Regression.Trainers.LightGbm(options);
+
+            // Neither switching objectives nor changing alpha after construction may affect training.
+            options.Objective = quantile ? LightGbmRegressionTrainer.Options.RegressionObjective.Regression
+                : LightGbmRegressionTrainer.Options.RegressionObjective.Quantile;
+            options.Alpha = 1 - alpha;
+            var rows = GetLightGbmQuantileRows();
+            var data = ML.Data.LoadFromEnumerable(rows);
+            var model = trainer.Fit(data);
+            var parameters = trainer.GetGbmParameters();
+            Assert.Equal(quantile ? "quantile" : "regression", parameters["objective"]);
+            if (quantile)
+                Assert.Equal(alpha, Assert.IsType<double>(parameters["alpha"]));
+            else
+                Assert.False(parameters.ContainsKey("alpha"));
+            var scores = model.Transform(data).GetColumn<float>("Score").ToArray();
+            Assert.Equal(rows.Length, scores.Length);
+            for (int i = 0; i < scores.Length; i++)
+            {
+                var expected = expectedScore + 200 * (rows[i].Features[0] - 1);
+                Assert.InRange(Math.Abs(scores[i] - expected), 0, 0.001f);
+            }
+            Done();
+        }
+
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(2)]
+        [InlineData(int.MaxValue)]
+        public void LightGbmRegressionQuantileValidatesObjective(int objective)
+        {
+            var options = new LightGbmRegressionTrainer.Options
+            {
+                Objective = (LightGbmRegressionTrainer.Options.RegressionObjective)objective,
+            };
+            var exception = Assert.Throws<ArgumentOutOfRangeException>(() => ML.Regression.Trainers.LightGbm(options));
+            Assert.Equal(nameof(options.Objective), exception.ParamName);
+            Done();
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void LightGbmRegressionQuantileValidatesAlpha(bool quantile)
+        {
+            var options = new LightGbmRegressionTrainer.Options
+            {
+                Objective = quantile ? LightGbmRegressionTrainer.Options.RegressionObjective.Quantile
+                    : LightGbmRegressionTrainer.Options.RegressionObjective.Regression,
+            };
+            // The last two doubles are in (0, 1), but round to native float endpoints.
+            foreach (var alpha in new[] { -0.1, 0, 1, 1.1, double.NaN, double.NegativeInfinity,
+                double.PositiveInfinity, double.Epsilon, 1.0 - 1e-12 })
+            {
+                options.Alpha = alpha;
+                var exception = Assert.Throws<ArgumentOutOfRangeException>(() => ML.Regression.Trainers.LightGbm(options));
+                Assert.Equal(nameof(options.Alpha), exception.ParamName);
+            }
+
+            // The adjacent representable floats inside the interval are valid at construction.
+            foreach (var alpha in new[] { (double)float.Epsilon, (double)0.99999994f })
+            {
+                options.Alpha = alpha;
+                Assert.NotNull(ML.Regression.Trainers.LightGbm(options));
+            }
+            Done();
+        }
+
+        [LightGBMTheory]
+        [InlineData("regression")]
+        [InlineData("quantile")]
+        public void LightGbmRegressionQuantileNativeModelImport(string objective)
+        {
+            var rows = GetLightGbmQuantileRows();
+            var data = ML.Data.LoadFromEnumerable(rows);
+            var features = rows.Select(row => row.Features[0]).ToArray();
+            var parameters = new Dictionary<string, object>
+            {
+                ["objective"] = objective,
+                ["alpha"] = 0.9,
+                ["metric"] = "",
+                ["learning_rate"] = 1.0,
+                ["num_leaves"] = 2,
+                ["min_data_per_leaf"] = 1,
+                ["num_threads"] = 1,
+                ["seed"] = 0,
+                ["deterministic"] = true,
+                ["force_row_wise"] = true,
+                ["verbose"] = -1,
+            };
+            using var dataset = new Trainers.LightGbm.Dataset(
+                new[] { features.Select(value => (double)value).ToArray() },
+                new[] { Enumerable.Range(0, rows.Length).ToArray() }, 1, new[] { rows.Length },
+                rows.Length, rows.Length, LightGbmInterfaceUtils.JoinParameters(parameters),
+                rows.Select(row => row.Label).ToArray());
+            dataset.PushRows(features, rows.Length, 1, 0);
+            using var nativeModel = new Booster(parameters, dataset);
+            for (int iteration = 0; iteration < 3; iteration++)
+            {
+                if (nativeModel.Update())
+                    break;
+            }
+
+            var nativeScores = new double[rows.Length];
+            int nativeLength = 0;
+            unsafe
+            {
+                fixed (float* input = features)
+                fixed (double* output = nativeScores)
+                    LightGbmInterfaceUtils.Check(WrappedLightGbmInterface.BoosterPredictForMat(
+                        nativeModel.Handle, (IntPtr)input, WrappedLightGbmInterface.CApiDType.Float32,
+                        rows.Length, 1, 1, (int)WrappedLightGbmInterface.CApiPredictType.Normal,
+                        0, -1, "", ref nativeLength, output));
+            }
+            Assert.Equal(rows.Length, nativeLength);
+            var modelText = nativeModel.GetModelString();
+            Assert.Contains("objective=" + objective, modelText);
+            var nativeParameters = Booster.GetParameters(modelText);
+            Assert.Equal(objective, nativeParameters["objective"]);
+            Assert.Equal(0.9, double.Parse(nativeParameters["alpha"], CultureInfo.InvariantCulture), 6);
+            if (objective == "quantile")
+            {
+                Assert.Equal("quantile", nativeParameters["metric"]);
+                var pinballLoss = rows.Select((row, i) =>
+                {
+                    var error = row.Label - nativeScores[i];
+                    return error >= 0 ? 0.9 * error : -0.1 * error;
+                }).Average();
+                Assert.InRange(Math.Abs(pinballLoss - nativeModel.EvalTrain()), 0, 0.0001);
+            }
+
+            // Export once and compare managed scoring with this SAME native model, not an independent fit.
+            var currentCulture = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                foreach (var culture in new[] { "en-US", "de-DE", "fr-FR" })
+                {
+                    Thread.CurrentThread.CurrentCulture = new CultureInfo(culture);
+                    using var stream = new MemoryStream(Encoding.UTF8.GetBytes(modelText));
+                    var trainer = ML.Regression.Trainers.LightGbm(stream);
+                    var importedModel = trainer.Fit(data);
+                    Assert.Equal(objective, trainer.GetGbmParameters()["objective"]);
+                    var scores = importedModel.Transform(data).GetColumn<float>("Score").ToArray();
+                    Assert.Equal(nativeScores.Length, scores.Length);
+                    for (int i = 0; i < scores.Length; i++)
+                        Assert.InRange(Math.Abs(nativeScores[i] - scores[i]), 0, 0.0001);
+                }
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = currentCulture;
+            }
+            Done();
+        }
+
+        private static LightGbmRegressionTrainer.Options CreateLightGbmQuantileOptions()
+            => new LightGbmRegressionTrainer.Options
+            {
+                NumberOfIterations = 3,
+                NumberOfLeaves = 2,
+                MinimumExampleCountPerLeaf = 1,
+                LearningRate = 1,
+                NumberOfThreads = 1,
+                Seed = 0,
+                Deterministic = true,
+                ForceRowWise = true,
+            };
+
+        private static LightGbmRegressionRow[] GetLightGbmQuantileRows()
+            // Each feature group has 20% low, 60% middle, 20% high labels. Its mean differs from its median.
+            => Enumerable.Range(0, 200).Select(i => new LightGbmRegressionRow
+            {
+                Features = new[] { (float)(i / 100 + 1) },
+                Label = 200 * (i / 100) + 0.25f + (i % 100 < 20 ? 0 : i % 100 < 80 ? 10 : 100),
+            }).ToArray();
+
+        private sealed class LightGbmRegressionRow
+        {
+            public float Label { get; set; }
+
+            [VectorType(1)]
+            public float[] Features { get; set; }
         }
 
 

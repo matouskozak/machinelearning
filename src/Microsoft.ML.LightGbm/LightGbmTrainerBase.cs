@@ -419,6 +419,12 @@ namespace Microsoft.ML.Trainers.LightGbm
 
                         foreach (var field in optionsFields)
                         {
+                            // These training-only settings are not needed to score imported regression trees.
+                            if (optionsType == typeof(LightGbmRegressionTrainer.Options) &&
+                                (field.Name == nameof(LightGbmRegressionTrainer.Options.Objective) ||
+                                 field.Name == nameof(LightGbmRegressionTrainer.Options.Alpha)))
+                                continue;
+
                             var lightGbmName = LightGbmTrainerOptions.GetOptionName(field.Name);
                             if (modelParameters.ContainsKey(lightGbmName))
                             {

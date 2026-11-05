@@ -96,6 +96,12 @@ namespace Microsoft.ML.Trainers.LightGbm
     /// | Exportable to ONNX | Yes |
     ///
     /// [!include[algorithm](~/../docs/samples/docs/api-reference/algo-details-lightgbm.md)]
+    ///
+    /// Set `Options.Objective` to `Options.RegressionObjective.Quantile`
+    /// to estimate the conditional quantile specified by `Options.Alpha` (0.5 by default).
+    /// The evaluation metric still defaults to RMSE. Set `Options.EvaluationMetric` to
+    /// `Options.EvaluateMetricType.Default` to monitor the objective's native metric (quantile loss).
+    /// Independently trained quantiles do not guarantee non-crossing predictions or calibrated interval coverage.
     /// ]]>
     /// </format>
     /// </remarks>
@@ -112,6 +118,9 @@ namespace Microsoft.ML.Trainers.LightGbm
         internal const string ShortName = "LightGBMR";
         internal const string UserNameValue = "LightGBM Regressor";
 
+        private readonly Options.RegressionObjective _objective;
+        private readonly double _alpha;
+
         private protected override PredictionKind PredictionKind => PredictionKind.Regression;
 
         /// <summary>
@@ -120,6 +129,22 @@ namespace Microsoft.ML.Trainers.LightGbm
         /// </summary>
         public sealed class Options : OptionsBase
         {
+            /// <summary>
+            /// The regression objective used for training.
+            /// </summary>
+            public enum RegressionObjective
+            {
+                /// <summary>
+                /// Least-squares regression.
+                /// </summary>
+                Regression = 0,
+
+                /// <summary>
+                /// Quantile regression using <see cref="Alpha"/>.
+                /// </summary>
+                Quantile = 1
+            }
+
             public enum EvaluateMetricType
             {
                 None,
@@ -128,6 +153,20 @@ namespace Microsoft.ML.Trainers.LightGbm
                 RootMeanSquaredError,
                 MeanSquaredError
             };
+
+            /// <summary>
+            /// The training objective. Defaults to least-squares regression.
+            /// </summary>
+            [Argument(ArgumentType.AtMostOnce, HelpText = "Regression training objective.")]
+            public RegressionObjective Objective = RegressionObjective.Regression;
+
+            /// <summary>
+            /// The target quantile, used only when <see cref="Objective"/> is <see cref="RegressionObjective.Quantile"/>.
+            /// Defaults to 0.5 (the median). Must remain strictly between 0 and 1 after conversion to single precision.
+            /// </summary>
+            [Argument(ArgumentType.AtMostOnce, HelpText = "Target quantile. Must be in (0,1) after conversion to single precision.")]
+            [TlcModule.Range(Inf = 0.0, Sup = 1.0)]
+            public double Alpha = 0.5;
 
             /// <summary>
             /// Determines what evaluation metric to use.
@@ -191,6 +230,13 @@ namespace Microsoft.ML.Trainers.LightGbm
         internal LightGbmRegressionTrainer(IHostEnvironment env, Options options)
              : base(env, LoadNameValue, options, TrainerUtils.MakeR4ScalarColumn(options.LabelColumnName))
         {
+            Contracts.CheckUserArg(options.Objective == Options.RegressionObjective.Regression ||
+                options.Objective == Options.RegressionObjective.Quantile, nameof(Options.Objective), "must be Regression or Quantile.");
+            // LightGBM stores alpha as a float, so doubles that round to an endpoint are invalid too.
+            Contracts.CheckUserArg((float)options.Alpha > 0 && (float)options.Alpha < 1,
+                nameof(Options.Alpha), "must be in (0,1) after conversion to single precision.");
+            _objective = options.Objective;
+            _alpha = options.Alpha;
         }
 
         /// <summary>
@@ -240,7 +286,9 @@ namespace Microsoft.ML.Trainers.LightGbm
 
         private protected override void CheckAndUpdateParametersBeforeTraining(IChannel ch, RoleMappedData data, float[] labels, int[] groups)
         {
-            GbmOptions["objective"] = "regression";
+            GbmOptions["objective"] = _objective == Options.RegressionObjective.Quantile ? "quantile" : "regression";
+            if (_objective == Options.RegressionObjective.Quantile)
+                GbmOptions["alpha"] = _alpha;
         }
 
         private protected override SchemaShape.Column[] GetOutputColumnsCore(SchemaShape inputSchema)

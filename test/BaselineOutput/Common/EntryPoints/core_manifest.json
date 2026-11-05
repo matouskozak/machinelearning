@@ -13246,6 +13246,34 @@
           "Default": "Auto"
         },
         {
+          "Name": "Objective",
+          "Type": {
+            "Kind": "Enum",
+            "Values": [
+              "Regression",
+              "Quantile"
+            ]
+          },
+          "Desc": "Regression training objective.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": "Regression"
+        },
+        {
+          "Name": "Alpha",
+          "Type": "Float",
+          "Desc": "Target quantile. Must be in (0,1) after conversion to single precision.",
+          "Required": false,
+          "SortOrder": 150.0,
+          "IsNullable": false,
+          "Default": 0.5,
+          "Range": {
+            "Sup": 1.0,
+            "Inf": 0.0
+          }
+        },
+        {
           "Name": "EvaluationMetric",
           "Type": {
             "Kind": "Enum",
